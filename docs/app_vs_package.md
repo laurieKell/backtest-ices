@@ -34,7 +34,12 @@ Comparison after the Celtic Sea cod worked example, checked against
 **Application = data, conditioning, case studies, contract deliverables.**
 
 Do **not** put stock-specific cleaning, SAG parsing, or report narrative into
-`FLBacktest`. Do **not** re-implement `hcrICES` / `runMSE` in blueMarine.
+`FLBacktest`. Do **not** re-implement `hcrICES` / `runMSE` / `fwdFbar` in
+blueMarine.
+
+The same rule applies to the sibling app
+[BIM-Resilience](https://github.com/laurieKell/BIM-Resilience): TAC scenario
+labels stay in the app; constant-\(F\) projection uses `fwdFbar`.
 
 ## SRR / TMB: `icesdata` vs `FLRebuild`
 

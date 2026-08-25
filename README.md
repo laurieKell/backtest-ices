@@ -7,7 +7,9 @@ Northeast Atlantic mackerel).
 **Application repo:** case-study data, Operating Model conditioning, knitted
 notebooks, and contract deliverables.  
 **Generic engine:** [FLBacktest](https://github.com/laurieKell/FLBacktest)
-(`hcrICES`, `fwdFbar`, `ltermEq`, `project_hcr`, `openloop_start`, …).
+(`hcrICES`, `fwdFbar`, `ltermEq`, `project_hcr`, `openloop_start`, …).  
+**Sibling app** (same engine, different question):
+[BIM-Resilience](https://github.com/laurieKell/BIM-Resilience).
 
 ## Quick start
 

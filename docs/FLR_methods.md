@@ -45,6 +45,10 @@ From this repo, a stock must fail loudly:
 (`load_om`, `require_om_gate`), `R/advice_sheets.R`. Stock-specific narrative
 lives in `06.1` / `06.2`, not in the generic runner.
 
+Sibling application using the same FLBacktest engine:
+[BIM-Resilience](https://github.com/laurieKell/BIM-Resilience)
+(TAC productivity scenarios; see that repo’s `docs/app_vs_package.md`).
+
 ## Empirical productivity (not climate)
 
 Historical `fwd` / `hcrICES` replay assessment life history and recruitment
