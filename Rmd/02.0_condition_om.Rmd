@@ -1,0 +1,433 @@
+---
+title: "Operating Models for the MSE"
+subtitle: "Task 3 — SRR scenario Operating Models (`bh1`–`rk3`)"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+mathjax: true
+---
+
+# Purpose
+
+Build the **Operating Models** used by the open- and closed-loop simulations
+([`04.1_openLoop.Rmd`](04.1_openLoop.Rmd), [`04.2_closedLoop.Rmd`](04.2_closedLoop.Rmd)).
+Stock dynamics, SPR0, process error, realised-status plots, and the
+`fwd` vs `FLBRP` long-term check are in
+[`02.2_dynamics.Rmd`](02.2_dynamics.Rmd)
+([`02.1_lterm_eq.Rmd`](02.1_lterm_eq.Rmd) has the full 50-year trajectories).
+Knit those **before** using the Operating Models in `04.1` / `04.2`.
+
+For each case-study stock:
+
+1. Load and clean the local WGCSE `FLStock`
+2. Fit six SRR scenarios (BH / Ricker × unconstrained, FishLife steepness, \(R_0\) fixed), plus three extra BH variants (`scn0`–`scn2`)
+3. Add benchmarks to `FLRP` from SAG \(F_{\mathrm{MSY}}\), \(B_{\lim}\) and \(MSYB_{\mathrm{trigger}}\)
+4. Condition the uncertainty treatment for stochastic \(M\), and SRR residuals
+
+Outputs: `data/results/03.0_om.RData`
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+root <- "C:/active/blueMarine"
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/interim/03.0_om"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "02.0_condition_om"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE, 
+  warning   = FALSE, 
+  message   = FALSE, 
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "02.0_condition_om/"),
+  fig.path  = file.path(root, "tex/figs", "02.0_condition_om-"),
+  fig.width = 9, 
+  fig.height= 5, 
+  dev       ="png")
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(FLRebuild)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLBacktest)
+  library(FLasher)
+  library(doParallel)
+  library(parallel)
+  library(foreach)
+})
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/loadStocks.R"))
+theme_set(theme_bluemarine_html())
+stocks      = read.csv(file.path(root, "data/reference/stocks.csv"), stringsAsFactors = FALSE)
+stocks$name = factor(stocks$name, levels = unique(stocks$name))
+sids        = as.character(stocks$sid)
+```
+
+# Stocks and SAG
+
+```{r data}
+oms = FLStocks(dlply(stocks, .(sid), function(x)
+  cleanStock(loadFLStock(x, file.path(root, "data/WGCSE")))))
+oms = oms[sids]
+
+sag = icesdata::getSAG(sids, yearBack=3, root=file.path(root, "data/sdGraphs"))
+sag$rfpts = sag$rfpts[!duplicated(sag$rfpts$sid), ]
+sag$rfpts = subset(sag$rfpts, sid %in% sids)
+sag$rfpts = sag$rfpts[do.call("order", sag$rfpts[c("sid","assYear")]), ]
+```
+
+# Scenario Operating Models
+
+Six SRR scenarios on the same biology: Beverton–Holt and Ricker, each with
+unconstrained parameters, a FishLife steepness prior, and \(R_0\) fixed.
+Three further BH fits (`scn0`–`scn2`) are stored alongside them. These are
+the Operating Models projected in `04.1` and `04.2`.
+
+```{r eqls}
+eqlsFn<-function(x, bpt, nyears=20, h=0.7, hCV=0.3, rCV=0.1) {
+  r0 = median(rec(x)[rec(x) > bpt])
+  icesdata::eql(x, model="bevholtSV", nyears=20, prior_s=h, cv_s=hCV,
+      prior_r0=r0, cv_r0=rCV)}
+
+eqs = mlply(sids, function(id) {
+  rtn = try(eqlsFn(oms[[id]],unlist(subset(sag$rfpts,sid==id)["MSYBtrigger"])))
+  if ("try-error" %in% is(rtn)) return(NULL)
+  rtn})
+names(eqs) = sids
+
+ncores = max(1L, detectCores() - 4L)
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+
+bh1 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="bevholtSV")})
+names(bh1) = sids
+
+bh2 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="bevholtSV",
+                prior_s=fishlife(oms[[id]])["s"], cv_s=0.1)})
+names(bh2) = sids
+
+bh3 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="bevholtSV",
+                prior_r0=unlist(subset(sag$rfpts,sid==id)["MSYBtrigger"])/unlist(subset(sag$rfpts,sid==id)["Blim"]), cv_r0=0.001)})
+names(bh3) = sids
+
+rk1 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="rickerSV")})
+names(rk1) = sids
+
+rk2 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="rickerSV",
+                prior_s=fishlife(oms[[id]])["s"], cv_s=0.1)})
+names(rk2) = sids
+
+rk3 = FLBRPs(foreach(id=sids, .packages=c("FLCore","FLBRP","icesdata","plyr")) %dopar% {
+  icesdata::eql(oms[[id]], model="rickerSV",
+                prior_r0=unlist(subset(sag$rfpts,sid==id)["Blim"])/unlist(subset(sag$rfpts,sid==id)["Blim"]), cv_r0=0.001)})
+names(rk3) = sids
+
+stopCluster(cl)
+eqls = list(bh1=bh1, bh2=bh2, bh3=bh3, rk1=rk1, rk2=rk2, rk3=rk3)
+eqs  = eqls[["bh1"]]
+ices_rfpts = function(id)
+  unlist(subset(sag$rfpts, sid == id)[, -(1:2)])
+for (id in sids)
+  eqs[[id]] = addBenchmark(eqs[[id]], ices_rfpts(id))
+eqls[["bh1"]] = eqs
+
+# Extra BH scenarios (ICES benchmarks on each FLBRP)
+scn0 = list()
+scn1 = list()
+scn2 = list()
+for (id in sids) {
+  blim = unlist(subset(sag$rfpts, sid == id)[, "Blim"])
+  flag = ssb(oms[[id]]) > blim
+  r0   = median(c(rec(oms[[id]])[flag]), na.rm = TRUE)
+  scn0[[id]] = icesdata::eql(oms[[id]], model = "bevholtSV",
+                             prior_s = 0.999, cv_s = 0.01,
+                             prior_r0 = r0, cv_r0 = 0.01)
+  scn0[[id]] = addBenchmark(scn0[[id]], ices_rfpts(id))
+
+  scn1[[id]] = icesdata::eql(oms[[id]], model = "bevholtSV")
+  scn1[[id]] = addBenchmark(scn1[[id]], ices_rfpts(id))
+
+  scn2[[id]] = try(eqlsFn(oms[[id]],
+                          unlist(subset(sag$rfpts, sid == id)["MSYBtrigger"])),
+                   silent = TRUE)
+  if (!inherits(scn2[[id]], "try-error") && !is.null(scn2[[id]]))
+    scn2[[id]] = addBenchmark(scn2[[id]], ices_rfpts(id))
+  else
+    scn2[[id]] = NULL
+}
+scn0 = FLBRPs(scn0)
+scn1 = FLBRPs(scn1)
+scn2 = FLBRPs(Filter(function(x) is(x, "FLBRP"), scn2))
+eqls$scn0 = scn0
+eqls$scn1 = scn1
+eqls$scn2 = scn2
+
+dir.create(file.path(root, "data/om"), recursive = TRUE, showWarnings = FALSE)
+save(oms, stocks, sids, file = file.path(root, "data/om/oms.RData"))
+save(sag, file = file.path(root, "data/om/sag.RData"))
+save(eqls, eqs, scn0, scn1, scn2, file = file.path(root, "data/om/eqls.RData"))
+
+```
+
+
+# Production functions and SRR
+
+Equilibrium yield and stock–recruitment on the production Operating Model (`bh1`), then
+the same curves for all six SRR scenarios.
+
+```{r plot-eq, fig.height=8, fig.width=9}
+for (id in sids) {
+  print(plot(eqls[["bh1"]][[id]], obs=TRUE, refpts="msy") +
+          labs(title = as.character(subset(stocks, sid == id)$name)))
+}
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Production Operating Model (`bh1`): equilibrium yield and
+SRR (`plot(FLBRP, obs=TRUE)`). Points are observed catch and recruitment.
+
+```{r plot-scn, fig.height=8, fig.width=9}
+plot_scn = function(eq, id) {
+  if (inherits(eq, "try-error") || is.null(eq)) {
+    plot.new()
+    title(main = paste(id, "(fit failed)"))
+    return(invisible(NULL))
+  }
+  print(plot(eq, obs = TRUE, refpts = c("msy", "Blim", "MSYBtrigger")) +
+          labs(title = id))
+}
+for (id in sids) plot_scn(scn0[[id]], paste(id, "scn0"))
+for (id in sids) plot_scn(scn1[[id]], paste(id, "scn1"))
+for (id in sids) plot_scn(scn2[[id]], paste(id, "scn2"))
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Extra BH Operating Models with ICES \(B_{\lim}\),
+\(MSYB_{\mathrm{trigger}}\) and \(F_{\mathrm{MSY}}\) on the FLBRP.
+**scn0** steepness 0.999 and \(R_0\) = median recruitment when SSB \(> B_{\lim}\);
+**scn1** unconstrained Beverton–Holt; **scn2** `eqlsFn` with \(MSYB_{\mathrm{trigger}}\)
+as the recruitment cutoff.
+
+```{r pf-rec, fig.height=11, fig.width=10}
+srr6 = c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3")
+scen_lab = data.frame(
+  srr   = srr6,
+  SRR   = factor(c(rep("Beverton & Holt", 3), rep("Ricker", 3)),
+                 levels = c("Beverton & Holt", "Ricker")),
+  prior = factor(rep(c("h & R0 estimated", "Steepness prior", "R0 fixed"), 2),
+                 levels = c("h & R0 estimated", "Steepness prior", "R0 fixed")),
+  stringsAsFactors = FALSE)
+
+pf = ldply(srr6, function(nm) {
+  d = ldply(eqls[[nm]], function(x)
+    model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))
+  names(d)[names(d) == ".id"] = "sid"
+  cbind(srr = nm, d)
+})
+pf = merge(pf, scen_lab, by="srr")
+pf = merge(pf, stocks[, c("sid", "name")], by="sid")
+pf$name = factor(pf$name, levels=levels(stocks$name))
+
+obs = ldply(eqls[["bh1"]], function(x)
+  model.frame(FLQuants(x, SSB=ssb.obs, Yield=catch.obs, Recruits=rec.obs),
+              drop=TRUE))
+names(obs)[names(obs) == ".id"] = "sid"
+obs = merge(obs, stocks[, c("sid", "name")], by="sid")
+obs$name = factor(obs$name, levels=levels(stocks$name))
+
+ggplot(pf, aes(SSB, Recruits, colour=SRR, linetype=prior)) +
+  facet_wrap(~ name, scales="free", ncol=2) +
+  geom_path(data=obs, aes(SSB, Recruits), inherit.aes=FALSE,
+            colour=bm_col("muted"), linewidth=0.35, alpha=0.75, na.rm=TRUE) +
+  geom_point(data=obs, aes(SSB, Recruits), inherit.aes=FALSE,
+             colour=bm_col("ink"), size=1.1, alpha=0.45, stroke=0, na.rm=TRUE) +
+  geom_line(linewidth=0.75, na.rm=TRUE) +
+  scale_colour_manual(values=c("Beverton & Holt"=bm_col("advice"),
+                               "Ricker"=bm_col("catch"))) +
+  scale_linetype_manual(values=c("h & R0 estimated"="solid",
+                                 "Steepness prior"="dashed",
+                                 "R0 fixed"="longdash")) +
+  labs(x="SSB (t)", y="Recruits", colour=NULL, linetype=NULL) +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Equilibrium recruitment vs SSB for the six SRR
+scenarios (colour = SRR, linetype = prior). Grey path and points are the
+observed stock–recruit pairs.
+
+```{r pf-yield, fig.height=11, fig.width=10}
+ggplot(pf, aes(SSB, Yield, colour=SRR, linetype=prior)) +
+  facet_wrap(~ name, scales="free", ncol=2) +
+  geom_path(data=obs, aes(SSB, Yield), inherit.aes=FALSE,
+            colour=bm_col("muted"), linewidth=0.35, alpha=0.75, na.rm=TRUE) +
+  geom_point(data=obs, aes(SSB, Yield), inherit.aes=FALSE,
+             colour=bm_col("ink"), size=1.1, alpha=0.45, stroke=0, na.rm=TRUE) +
+  geom_line(linewidth=0.75, na.rm=TRUE) +
+  scale_colour_manual(values=c("Beverton & Holt"=bm_col("advice"),
+                               "Ricker"=bm_col("catch"))) +
+  scale_linetype_manual(values=c("h & R0 estimated"="solid",
+                                 "Steepness prior"="dashed",
+                                 "R0 fixed"="longdash")) +
+  labs(x="SSB (t)", y="Yield (t)", colour=NULL, linetype=NULL) +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Equilibrium yield vs SSB for the same six SRR
+scenarios, with the observed assessment trajectory in grey.
+
+# Process error
+
+Log recruitment residuals and surplus-production process error on the six SRR
+scenarios, using the same colour and linetype as Figures 2–3.
+
+```{r pe-scen}
+rec_pe = rbind.fill(lapply(srr6, function(nm) {
+  rbind.fill(lapply(sids, function(id) {
+    r = try(residuals(attributes(attributes(eqls[[nm]][[id]])$sr)),
+            silent = TRUE)
+    if (inherits(r, "try-error") || is.null(r)) return(NULL)
+    cbind(srr = nm, sid = id, as.data.frame(r, drop = TRUE))
+  }))
+}))
+if (is.null(rec_pe) || !nrow(rec_pe) || !"srr" %in% names(rec_pe))
+  rec_pe = data.frame(srr=character(), sid=character(), year=integer(),
+                      data=numeric(), stringsAsFactors=FALSE)
+rec_pe = merge(rec_pe, scen_lab, by = "srr", all.x = TRUE)
+rec_pe = merge(rec_pe, stocks[, c("sid", "name")], by = "sid", all.x = TRUE)
+if (nrow(rec_pe))
+  rec_pe$name = factor(rec_pe$name, levels = levels(stocks$name))
+
+yield_pe = rbind.fill(lapply(srr6, function(nm) {
+  rbind.fill(lapply(sids, function(id) {
+    peq = try(processError(eqls[[nm]][[id]]), silent = TRUE)
+    if (inherits(peq, "try-error") || is.null(peq)) {
+      pe = try(pe(oms[[id]], eqls[[nm]][[id]]), silent = TRUE)
+      if (inherits(pe, "try-error") || is.null(pe)) return(NULL)
+      return(cbind(srr = nm, sid = id, as.data.frame(pe, drop = TRUE)))
+    }
+    pe = if (is(peq, "FLQuants") && "pe" %in% names(peq)) peq[["pe"]] else peq
+    cbind(srr = nm, sid = id, as.data.frame(pe, drop = TRUE))
+  }))
+}))
+if (is.null(yield_pe) || !nrow(yield_pe) || !"srr" %in% names(yield_pe))
+  yield_pe = data.frame(srr=character(), sid=character(), year=integer(),
+                        data=numeric(), stringsAsFactors=FALSE)
+yield_pe = merge(yield_pe, scen_lab, by = "srr", all.x = TRUE)
+yield_pe = merge(yield_pe, stocks[, c("sid", "name")], by = "sid", all.x = TRUE)
+if (nrow(yield_pe))
+  yield_pe$name = factor(yield_pe$name, levels = levels(stocks$name))
+```
+
+```{r rec-pe, fig.height=11, fig.width=10}
+ggplot(rec_pe, aes(year, data, colour = SRR, linetype = prior)) +
+  facet_wrap(~ name, scales = "free_y", ncol = 2) +
+  geom_hline(yintercept = 0, colour = bm_col("ref_strong"), linewidth = 0.35) +
+  geom_line(linewidth = 0.6, na.rm = TRUE) +
+  scale_colour_manual(values = c("Beverton & Holt" = bm_col("advice"),
+                                 "Ricker" = bm_col("catch"))) +
+  scale_linetype_manual(values = c("h & R0 estimated" = "solid",
+                                   "Steepness prior" = "dashed",
+                                   "R0 fixed" = "longdash")) +
+  labs(x = "Year", y = "log recruitment residual", colour = NULL, linetype = NULL) +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Recruitment process error: log SRR residuals by
+year for the six scenarios (colour = SRR, linetype = prior).
+
+```{r yield-pe, fig.height=11, fig.width=10}
+ggplot(yield_pe, aes(year, data, colour = SRR, linetype = prior)) +
+  facet_wrap(~ name, scales = "free_y", ncol = 2) +
+  geom_hline(yintercept = 0, colour = bm_col("ref_strong"), linewidth = 0.35) +
+  geom_line(linewidth = 0.6, na.rm = TRUE) +
+  scale_colour_manual(values = c("Beverton & Holt" = bm_col("advice"),
+                                 "Ricker" = bm_col("catch"))) +
+  scale_linetype_manual(values = c("h & R0 estimated" = "solid",
+                                   "Steepness prior" = "dashed",
+                                   "R0 fixed" = "longdash")) +
+  labs(x = "Year", y = expression((SSB[t+1]-SSB[t]+C[t]-SP[t])/SSB[t]),
+       colour = NULL, linetype = NULL) +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Surplus-production process error
+(`icesdata::processError`) by year for the same six scenarios.
+
+Log residuals of the unconstrained BH SRR (`bh1` / `eqs`) from `recDevs()`,
+regime means from `rod()`, and multiplicative deviations (`devs`) used by
+`04.1`. Surplus-production process error for the same equilibria is
+`peDevs(..., scale = "raw")`.
+
+```{r rec-dev}
+rd = recDevs(eqs, nits = 100L)
+pd = peDevs(eqs, scale = "raw", stock = oms)
+rsdl    = rd$residuals
+rods    = rd$rod
+devs    = rd$sim
+peQ     = pd$residuals
+pe_rods = pd$rod
+
+save(rods, stocks, rsdl, devs, file = file.path(root, "data/om/recDevs.RData"))
+```
+
+
+```{r rec-dev-plot, fig.height=10, fig.width=9}
+ggplot(merge(transform(as.data.frame(rsdl, drop=TRUE), sid=qname), stocks, by="sid")) +
+  geom_polygon(aes(year, data, group=regime),
+               fill=bm_col("strip_fill"), colour=bm_col("advice"),
+               linewidth=0.25, alpha=0.55,
+               data=merge(rods, stocks, by="sid")) +
+  geom_line(aes(year, data), colour=bm_col("ink"), linewidth=0.45) +
+  geom_point(aes(year, data), colour=bm_col("ink"), size=0.9) +
+  facet_grid(name ~ ., scales="free_y") +
+  labs(x="Year", y="log residual") +
+  theme_bluemarine_html() +
+  theme_facet_rows_rotated()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Log recruitment residuals (points and line)
+with `rod()` regime means (shaded). These residuals, replayed with the
+assessment life history, are the observed productivity history used in
+the historical backtest.
+
+```{r pe-dev-plot, fig.height=10, fig.width=9}
+ggplot(merge(transform(as.data.frame(peQ, drop=TRUE), sid=qname), stocks, by="sid")) +
+  geom_polygon(aes(year, data, group=regime),
+               fill=bm_col("strip_fill"), colour=bm_col("catch"),
+               linewidth=0.25, alpha=0.55,
+               data=merge(pe_rods, stocks, by="sid")) +
+  geom_line(aes(year, data), colour=bm_col("ink"), linewidth=0.45) +
+  geom_point(aes(year, data), colour=bm_col("ink"), size=0.9) +
+  geom_hline(yintercept=0, colour=bm_col("ref_strong"), linewidth=0.35) +
+  facet_grid(name ~ ., scales="free_y") +
+  labs(x="Year", y=expression((SSB[t+1]-SSB[t]+C[t]-SP[t])/SSB[t])) +
+  theme_bluemarine_html() +
+  theme_facet_rows_rotated()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Surplus-production process error (points and
+line) with `rod()` regime means (shaded).
+
+```{r rec-dev2, fig.height=8, fig.width=9}
+plot(devs, probs=c(0.75, 0.5, 0.25))
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Simulated multiplicative recruitment
+deviations (100 iterations; 25, 50 and 75% quantiles) for open-loop `fwd`.
+

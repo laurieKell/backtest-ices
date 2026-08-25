@@ -1,0 +1,505 @@
+---
+title: "What would have happened if ICES advice had been followed?"
+subtitle: "Celtic Sea cod and Irish Sea whiting"
+author: "Laurence Kell, Sea++"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: flatly
+bibliography: refs.bib
+---
+
+# Introduction
+
+What would historical and current status looked like for two ICES Category 1 stocks, Celtic Sea cod (`cod.27.7e-k`) and Irish Sea whiting (`whg.27.7a`), if ICES advice had been implemented?
+
+To answer this hypothetical question we conduct a **backtest**, where we took the most recent stock assessment went back several years and then simulated i) fishing at the ICES $F_{target}$ and ii) the ICES advice rule. This provides two counterfactual evolutions of the stock. The first is a projection or open-loop simulation, while the second is a closed-loop (i.e. with feed-back) simulation of the ICES hockey-stick advice rule .
+
+Historical productivity, varibaility and regime shifts, is presevered by reusing historical biological (natural mortality, maturity and mass-at-age) and fishery (selectivity) assumptions, and recruitment deviates. For the projections a stock recruitment relationship, fitted to the historical stock assessment estimates, was assumed so that if spawning stock biomass increased so would the expected level of recruitment but year-class variabilty was preserved. 
+
+In the backtest the ICES reference points, i.e.
+ICES $B_{\lim}$, $B_{\mathrm{trigger}}$ and $F_{\mathrm{target}}$, are **operational HCR control points**. In the simulations (i.e. in the Operating Model) in contrast $B_{\mathrm{MSY}}$ and $F_{\mathrm{MSY}}$ are **performance metrics** conditional on the assumed SRR.
+
+## ICES reference points
+
+ICES derives $B_{\lim}$, $B_{\mathrm{trigger}}$, $F_{\lim}$, $F_{\mathrm{pa}}$ and
+$F_{\mathrm{MSY}}$ using the \texttt{EqSim} software, together with estimates of SSB and
+recruitment from stock assessments. Usually a hockey-stick stock recruitment relationship
+is assumed, with constant recruitment above a breakpoint, below which recruitment declines
+linearly to the origin [@mesnil2010continuous]; the backtest instead uses a biologically
+plausible SRR for the Operating Model. 
+
+ICES commonly sets $B_{\lim}$ based on  a two-line hockey-stick stock recruitment relationship; where there is a wide range of SSB and impaired recruitment is observed	$B_{lim}$ is set at the breakpoint of a segmented (hockey-stick) regression. The $F$ reference points are then conditioned on it: $F_{\lim}$ is the fishing mortality that drives equilibrium SSB to $B_{\lim}$ under deterministic dynamics,
+while $F_{\mathrm{pa}}$ is taken as $F_{p.05}$, the largest $F$ for which the probability of
+SSB falling below $B_{\lim}$ does not exceed 5\% in stochastic projections that include
+assessment and advice error. $F_{\mathrm{MSY}}$ is obtained by maximising stochastic
+long-term yield, but is then capped so that $F_{\mathrm{MSY}} \le F_{p.05}$, and
+$F_{\mathrm{target}}$ is reduced linearly once SSB falls below $B_{\mathrm{trigger}}$
+[@ices2021technical]. For many ICES stocks the hockey-stick breakpoint sits near or below
+$B_{\mathrm{MSY}}$ under equilibrium assumptions, so that a limit can look like a target.
+The precautionary cap and the advice rule are both based on $B_{\lim}$, therefore the
+resulting $F$ reference points  are not the same as those based on equilibrium or long-term projections since $\texttt{EqSim}$ therefore derives its reference points by constraining them jointly. ICES $B_{\lim}$, $B_{\mathrm{trigger}}$ and $F_{\mathrm{target}}$ may not be consistent with the Operating Model values of $B_{\mathrm{MSY}}$s. 
+
+For Irish Sea whiting $B_{\lim}$ is 1,670 t,and  $MSYB_{\mathrm{trigger}}=2{,}322$ t. For Celtic Sea cod $B_{loss}$, the lowest observed spawning-stock biomass from which there has been some is used as $B_{lim}$ [@NWWACCelticSeaCod2024]. In both cases the SSB–recruit “data” are assessment outputs, not independent observations [@Winker2022InsideOut], so if assessment assumptions change so will the reference points evn if there has been no change in the actual stock. 
+
+
+For Celtic Sea cod (`cod.27.7e-k`) based on ICES Advice fishing pressure is currently above $F_{\mathrm{MSY}}$ and pawning-stock biomass is below $MSYB_{\mathrm{trigger}}$ and $B_{\lim}$, therefore advice is zero catch in 2027. For Irish Sea whiting (`whg.27.7a`) fishing pressure is above $F_{\mathrm{MSY}}$ and spawning-stock biomass is below $MSYB_{\mathrm{trigger}}$, advice is that total removals in 2026 should be no more than 200 t.
+
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root = "C:/active/blueMarine"
+
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "06.1_TwoStocks"), recursive = TRUE,
+           showWarnings = FALSE)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(
+  echo       = FALSE,
+  warning    = FALSE,
+  message    = FALSE,
+  error      = FALSE,
+  cache      = FALSE,
+  cache.path = file.path(root, "Rmd/cache", "06.1_TwoStocks/"),
+  fig.path   = file.path(root, "tex/figs", "06.1_TwoStocks-"),
+  fig.width  = 9,
+  fig.height = 5,
+  dev        = "png")
+
+Fig = 0
+Tab = 0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(FLRebuild)
+  library(plyr)
+  library(ggplot2)
+  library(patchwork)
+  library(openxlsx)
+  library(FLasher)
+  library(FLBacktest)
+  library(ggplotFL)
+})
+
+if (!exists("project_hcr", mode = "function"))
+  suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
+
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/om.R"))
+source(file.path(root, "R/advice_sheets.R"))
+theme_set(theme_bluemarine_html())
+update_geom_defaults("line", list(linewidth = 1.1))
+
+cols = c(Historical = "#000000", Ftarget = "#0072B2", "Advice rule" = "#D55E00")
+metrics = list(F = fbar, SSB = ssb, Rec = rec, Catch = catch)
+```
+
+```{r load}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+load(file.path(root, "data/results/03.1_openLoop.RData"))
+load(file.path(root, "data/results/03.2_closedLoop.RData"))
+
+sids   = c("cod.27.7e-k", "whg.27.7a")
+require_om_gate(root, sids)
+om_srr = c("whg.27.7a" = "scn2", "cod.27.7e-k" = "scn0")
+# ICES HCR inputs (SAG Ftarget / Blim / Btrigger on bh1). Not the OM SRR.
+eqs    = eqls[["bh1"]]
+
+om_eq = function(id) {
+  nm = unname(om_srr[id])
+  eq = eqls[[nm]][[id]]
+  if (is.null(eq))
+    stop("Missing Operating Model eqls$", nm, "$", id, call. = FALSE)
+  eq
+}
+om_sr = function(id) {
+  eq = om_eq(id)
+  sr_att = attributes(eq)$sr
+  if (is.list(sr_att) && !is(sr_att, "FLSR")) sr_att = sr_att[[1]]
+  if (!is(sr_att, "FLSR"))
+    stop("No attached FLSR on eqls$", unname(om_srr[id]), "$", id, call. = FALSE)
+  # as(FLBRP, "FLSR") uses this FLBRP's model and params (scn2 for whiting).
+  # The attached FLSR can carry one param iter per year, which breaks ffwd.
+  as(eq, "FLSR")
+}
+
+nYears = 20L
+startYr_ftar = setNames(vapply(sids, function(id)
+  openloop_start(oms[[id]]), integer(1L)), sids)
+startYr_ar = 2015L
+endYr = setNames(as.integer(stocks$end[match(sids, stocks$sid)]), sids)
+stock_levels = as.character(stocks$name[match(sids, stocks$sid)])
+
+missing = character()
+for (id in sids) {
+  srr = unname(om_srr[id])
+  if (is.null(oms[[id]])) missing = c(missing, paste0("oms$", id))
+  if (is.null(openLoop[["SRR"]][[srr]][[id]]))
+    missing = c(missing, paste0("openLoop$SRR$", srr, "$", id))
+  if (is.null(closedLoop[["SRR"]][[srr]][[id]]))
+    missing = c(missing, paste0("closedLoop$SRR$", srr, "$", id))
+  sr_err = tryCatch({ om_sr(id); NULL }, error = function(e) conditionMessage(e))
+  if (!is.null(sr_err)) missing = c(missing, sr_err)
+}
+if (length(missing))
+  stop("Missing backtest objects: ", paste(missing, collapse = ", "), call. = FALSE)
+
+advice = load_advice_sheets(root)
+advice_vs_hcr = check_advice_vs_eqls(advice, eqs, sids)
+```
+
+
+# What if advice had been followed?
+
+The backtest poses the question that for a stock, assuming the observed and estimated biology, selection pattern, and recruitment, what would historical and current status have been if ICES advice had been implemented?
+
+Black is the historical assessment, Blue is the $F_{\mathrm{target}}$ (open-loop) projection from 1990 , Orange is applying the ICES advice rule from 2015. Horizontal lines are ICES $B_{\lim}$, $B_{\mathrm{trigger}}$ and $F_{\mathrm{target}}$. Red bands are Operating Model $SSB < B_{\mathrm{MSY}}$ and $F > F_{\mathrm{MSY}}$. Figure 1 shows the time series from 1980 and Figure 2 zooms into the recent period after the advice rule is applied.
+
+```{r ts-refpts, fig.height=8, fig.width=10}
+for (id in sids) {
+  srr  = unname(om_srr[id])
+  nm   = as.character(stocks$name[match(id, stocks$sid)])
+  ices = refpts(eqs[[id]])
+  rp   = refpts(om_eq(id))
+  x0   = dims(oms[[id]])$minyear
+  yT   = endYr[id]
+
+  p = plot(FLStocks(
+        Historical    = window(oms[[id]], end = yT),
+        Ftarget       = window(openLoop[["SRR"]][[srr]][[id]],
+                               start = startYr_ftar[id], end = yT),
+        "Advice rule" = window(closedLoop[["SRR"]][[srr]][[id]],
+                               start = startYr_ar, end = yT)),
+      metrics = metrics) +
+      scale_colour_manual(values = cols) +
+      scale_fill_manual(values = cols, guide = "none") +
+      geom_flpar(data = FLPars(SSB = FLPar(Blim = c(ices["Blim", "ssb"]))),
+                 x = x0 + 10, colour = "red", linetype = 2) +
+      geom_flpar(data = FLPars(SSB = FLPar(Btrig = c(ices["MSYBtrigger", "ssb"]))),
+                 x = x0 + 5, colour = bm_col("trigger"), linetype = 2) +
+      geom_flpar(data = FLPars(F = FLPar(Ftarget = c(ices["FMSY", "harvest"]))),
+                 x = x0 + 10, colour = bm_col("f_target"), linetype = 2) +
+      labs(title = nm, x = "Year") +
+      theme_bluemarine_html()
+  print(shade_msy_status(p, xmin = x0, xmax = yT,
+                         bmsy = c(rp["msy", "ssb"]),
+                         fmsy = c(rp["msy", "harvest"])))
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Assessment (black), $F_{\mathrm{target}}$ from 1990 (blue), ICES advice rule from 2015 (orange). Coloured lines are ICES $B_{\lim}$, $B_{\mathrm{trigger}}$ and $F_{\mathrm{target}}$. Red bands are Operating Model $SSB < B_{\mathrm{MSY}}$ and $F > F_{\mathrm{MSY}}$.
+
+```{r ts-refpts-2014, fig.height=9, fig.width=16}
+x0 = 2014
+ps = vector("list", length(sids))
+names(ps) = sids
+for (id in sids) {
+  srr  = unname(om_srr[id])
+  nm   = as.character(stocks$name[match(id, stocks$sid)])
+  ices = refpts(eqs[[id]])
+  rp   = refpts(om_eq(id))
+  yT   = endYr[id]
+
+  p = plot(FLStocks(
+        Historical    = window(oms[[id]], start = x0, end = yT),
+        Ftarget       = window(openLoop[["SRR"]][[srr]][[id]],
+                               start = x0, end = yT),
+        "Advice rule" = window(closedLoop[["SRR"]][[srr]][[id]],
+                               start = x0, end = yT)),
+      metrics = metrics) +
+      scale_colour_manual(values = cols) +
+      scale_fill_manual(values = cols, guide = "none") +
+      geom_flpar(data = FLPars(SSB = FLPar(Blim = c(ices["Blim", "ssb"]))),
+                 x = x0, colour = "red", linetype = 2) +
+      geom_flpar(data = FLPars(SSB = FLPar(Btrig = c(ices["MSYBtrigger", "ssb"]))),
+                 x = x0 + 2, colour = bm_col("trigger"), linetype = 2) +
+      geom_flpar(data = FLPars(F = FLPar(Ftarget = c(ices["FMSY", "harvest"]))),
+                 x = x0, colour = bm_col("f_target"), linetype = 2) +
+      labs(title = nm, x = "Year") +
+      theme_bluemarine_html()
+  ps[[id]] = shade_msy_status(p, xmin = x0, xmax = yT,
+                              bmsy = c(rp["msy", "ssb"]),
+                              fmsy = c(rp["msy", "harvest"]))
+}
+print(wrap_plots(ps, ncol = 2, guides = "collect") &
+        theme(legend.position = "bottom"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Same backtest from 2014. Celtic Sea cod (left), Irish Sea whiting (right). Red bands are Operating Model $SSB < B_{\mathrm{MSY}}$ and $F > F_{\mathrm{MSY}}$.
+
+# Historical, current and future comparisions
+
+**Historical** — open loop, 1990 to the terminal year, $F=F_{\mathrm{target}}$, observed residuals.
+
+**Current** — closed loop, 2015 to the terminal year, ICES advice rule, same residuals (productivity known).
+
+**Future** — twenty-year rebuild from the terminal state with **mean** recruitment. That is not the same productivity history.
+
+Irish Sea whiting has not been assessed recently, so its years differ from Celtic Sea cod.
+
+```{r backtest-closed-hcr, fig.height=8, fig.width=18}
+for (id in sids) {
+  srr  = unname(om_srr[id])
+  nm   = as.character(stocks$name[match(id, stocks$sid)])
+  om   = window(oms[[id]], end = endYr[id])
+  eq   = om_eq(id)
+  rp   = refpts(eq)
+  ices = refpts(eqs[[id]])
+  yT   = endYr[id]
+  x0   = 1990
+
+  om_par = FLPars(
+    Rec   = FLPar(R0   = c(rp["virgin", "rec"])),
+    SSB   = FLPar(Bmsy = c(rp["msy", "ssb"])),
+    Catch = FLPar(MSY  = c(rp["msy", "yield"])),
+    F     = FLPar(Fmsy = c(rp["msy", "harvest"])))
+  ices_blim  = FLPars(SSB = FLPar(Blim  = c(ices["Blim", "ssb"])))
+  ices_btrig = FLPars(SSB = FLPar(Btrig = c(ices["MSYBtrigger", "ssb"])))
+  ices_ftar  = FLPars(F   = FLPar(Ftarget = c(ices["FMSY", "harvest"])))
+
+  hist_fut = project_hcr(om, eq, hcrParams(eqs[[id]]), nYears)
+  ar_fut   = project_hcr(window(closedLoop[["SRR"]][[srr]][[id]], end = yT), eq,
+                         hcrParams(eqs[[id]]), nYears)
+  yF = dims(hist_fut)$maxyear
+
+  p_h = plot(FLStocks(
+      Historical = window(om, start = x0, end = yT),
+      Ftarget    = window(openLoop[["SRR"]][[srr]][[id]], start = x0, end = yT)),
+    metrics = metrics) +
+    scale_colour_manual(values = cols) +
+    scale_fill_manual(values = cols, guide = "none") +
+    geom_vline(xintercept = c(startYr_ftar[id], startYr_ar), linetype = 3) +
+    geom_flpar(data = om_par, x = x0, colour = bm_col("muted"), linetype = 2) +
+    geom_flpar(data = ices_blim,  x = 2010, colour = "red", linetype = 2) +
+    geom_flpar(data = ices_btrig, x = 2010, colour = bm_col("trigger"), linetype = 2) +
+    geom_flpar(data = ices_ftar,  x = 2010, colour = bm_col("f_target"), linetype = 2) +
+    labs(title = paste(nm, "— Historical")) +
+    theme_bluemarine_html()
+  p_h = shade_msy_status(p_h, xmin = x0, xmax = yT,
+                         bmsy = c(rp["msy", "ssb"]),
+                         fmsy = c(rp["msy", "harvest"]))
+
+  p_c = plot(FLStocks(
+      Historical    = window(hist_fut, start = startYr_ar, end = yT),
+      "Advice rule" = window(ar_fut, start = startYr_ar, end = yT)),
+    metrics = metrics) +
+    scale_colour_manual(values = cols) +
+    scale_fill_manual(values = cols, guide = "none") +
+    geom_vline(xintercept = c(startYr_ar, yT), linetype = 3) +
+    geom_flpar(data = om_par, x = startYr_ar, colour = bm_col("muted"), linetype = 2) +
+    geom_flpar(data = ices_blim,  x = startYr_ar + 2, colour = "red", linetype = 2) +
+    geom_flpar(data = ices_btrig, x = startYr_ar + 2, colour = bm_col("trigger"), linetype = 2) +
+    geom_flpar(data = ices_ftar,  x = startYr_ar + 2, colour = bm_col("f_target"), linetype = 2) +
+    labs(title = "Current") +
+    theme_bluemarine_html()
+  p_c = shade_msy_status(p_c, xmin = startYr_ar, xmax = yT,
+                         bmsy = c(rp["msy", "ssb"]),
+                         fmsy = c(rp["msy", "harvest"]))
+
+  p_f = plot(FLStocks(
+      Historical    = window(hist_fut, start = 2000, end = yF),
+      "Advice rule" = window(ar_fut, start = 2000, end = yF)),
+    metrics = metrics) +
+    scale_colour_manual(values = cols) +
+    scale_fill_manual(values = cols, guide = "none") +
+    geom_vline(xintercept = c(startYr_ftar[id], startYr_ar, yT), linetype = 3) +
+    geom_flpar(data = om_par, x = 2000, colour = bm_col("muted"), linetype = 2) +
+    geom_flpar(data = ices_blim,  x = 2010, colour = "red", linetype = 2) +
+    geom_flpar(data = ices_btrig, x = 2010, colour = bm_col("trigger"), linetype = 2) +
+    geom_flpar(data = ices_ftar,  x = 2010, colour = bm_col("f_target"), linetype = 2) +
+    labs(title = "Future") +
+    theme_bluemarine_html()
+  p_f = shade_msy_status(p_f, xmin = 2000, xmax = yF,
+                         bmsy = c(rp["msy", "ssb"]),
+                         fmsy = c(rp["msy", "harvest"]))
+
+  print((p_h | p_c | p_f) +
+          plot_layout(widths = c(yT - x0, yT - startYr_ar, yF - 2000),
+                      guides = "collect") &
+          theme(legend.position = "bottom"))
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Historical (left), Current (middle), Future (right). Middle panel is a zoom of the right-hand series. Red bands are Operating Model $SSB < B_{\mathrm{MSY}}$ and $F > F_{\mathrm{MSY}}$.
+
+# Productivity Regimes
+
+Catch is not the only driver, there have been changes in recruitment level independent of biomass and in growth. The Operating Model used a stock–recruitment relationship and residuals based on the estimated recruitment. Those residuals, with time-varying $M$, maturity and mass-at-age, determine  the  observed productivity history [@Lindmark2026productivity]. If $F$ falls, SSB can rise, which changes expected recruitment; while the residual history stays the same.
+
+```{r rec-devs, fig.height=6, fig.width=9}
+if (!exists("rod", mode = "function"))
+  stop("STARS rod() is missing; load FLRebuild", call. = FALSE)
+
+rsdl = FLQuants(lapply(sids, function(id) {
+  r = residuals(om_sr(id))
+  if (!any(is.finite(c(r))))
+    stop("SRR residuals are not finite for ", id, call. = FALSE)
+  window(r, end = endYr[id])
+}))
+names(rsdl) = sids
+
+rods = ldply(sids, function(id) {
+  rd = rod(rsdl[[id]])
+  if (!is.data.frame(rd) || !nrow(rd) || !("regime" %in% names(rd)))
+    stop("STARS/regime polygons missing for ", id, call. = FALSE)
+  cbind(sid = id, rd)
+})
+
+print(
+  ggplot(transform(
+           merge(transform(as.data.frame(rsdl, drop = TRUE), sid = qname),
+                 stocks, by = "sid"),
+           name = factor(as.character(name), levels = stock_levels))) +
+    geom_polygon(aes(year, data, group = regime),
+                 fill = bm_col("strip_fill"), colour = bm_col("advice"),
+                 linewidth = 0.25, alpha = 0.55,
+                 data = transform(
+                   merge(rods, stocks, by = "sid"),
+                   name = factor(as.character(name), levels = stock_levels))) +
+    geom_hline(yintercept = 0, colour = bm_col("ref_strong"),
+               linewidth = 0.35) +
+    geom_line(aes(year, data), colour = bm_col("ink"), linewidth = 0.45) +
+    geom_point(aes(year, data), colour = bm_col("ink"), size = 0.9) +
+    facet_grid(name ~ ., scales = "free_y") +
+    labs(x = "Year", y = "log residual") +
+    theme_bluemarine_html() +
+    theme_facet_rows_rotated())
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Log recruitment residuals from the Operating Model SRR (`r om_srr["cod.27.7e-k"]` Celtic Sea cod, `r om_srr["whg.27.7a"]` Irish Sea whiting), with STARS regime means (shaded). Irish Sea whiting recruitment in the assessment is a smooth series, so these residuals are strongly autocorrelated; they are still the deviations replayed in the historical backtest.
+
+
+
+```{r b0dyn, fig.height=10, fig.width=9}
+ps = vector("list", length(sids))
+names(ps) = sids
+for (id in sids) {
+  stk  = window(oms[[id]], end = endYr[id])
+  sr   = om_sr(id)
+  stk0 = b0dyn(stk, sr)
+  ps[[id]] =
+    ggplot(FLQuants(SSB = ssb(stk), b0dyn = ssb(stk0)),
+           aes(year, data, colour = qname)) +
+      geom_line() +
+      scale_colour_manual(values = c(SSB = "#000000", b0dyn = bm_col("catch"))) +
+      labs(title = as.character(stocks$name[match(id, stocks$sid)]),
+           x = "Year", y = "Biomass", colour = NULL) +
+      theme_bluemarine_html()
+}
+print(Reduce(`/`, ps) + plot_layout(guides = "collect") &
+        theme(legend.position = "bottom"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Assessment SSB (black) and dynamic unfished SSB (red). The gap is depletion against a productivity-varying unfished stock.
+
+`b0dyn` replays the assessment at $F=0$ with the same SRR, life history and residuals: dynamic unfished SSB given the productivity that occurred [@Lindmark2026productivity].
+
+```{r pf-rec, fig.height=10, fig.width=9}
+eq_om = lapply(sids, om_eq)
+names(eq_om) = sids
+
+pf = ldply(sids, function(id) {
+  cbind(sid = id, om = unname(om_srr[id]),
+        model.frame(FLQuants(eq_om[[id]], SSB = ssb, Yield = catch, Recruits = rec),
+                    drop = TRUE))
+})
+pf = merge(pf, stocks[, c("sid", "name")], by = "sid")
+pf$name = factor(as.character(pf$name), levels = stock_levels)
+
+obs = ldply(sids, function(id) {
+  cbind(sid = id,
+        model.frame(FLQuants(eq_om[[id]],
+                             SSB = ssb.obs, Yield = catch.obs, Recruits = rec.obs),
+                    drop = TRUE))
+})
+obs = merge(obs, stocks[, c("sid", "name")], by = "sid")
+obs$name = factor(as.character(obs$name), levels = stock_levels)
+
+ggplot(pf, aes(SSB, Recruits)) +
+  facet_wrap(~ name, scales = "free", ncol = 1) +
+  geom_path(data = obs, aes(SSB, Recruits), inherit.aes = FALSE,
+            colour = bm_col("muted"), linewidth = 0.35, alpha = 0.75) +
+  geom_point(data = obs, aes(SSB, Recruits), inherit.aes = FALSE,
+             colour = bm_col("ink"), size = 1.1, alpha = 0.45, stroke = 0) +
+  geom_line(colour = bm_col("catch"), linewidth = 0.75) +
+  labs(x = "SSB (t)", y = "Recruits") +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SRRs: Operating Model stock–recruitment relationships (`r om_srr["cod.27.7e-k"]` Celtic Sea cod, `r om_srr["whg.27.7a"]` Irish Sea whiting) with observed pairs.
+
+```{r pf-yield, fig.height=10, fig.width=9}
+ggplot(pf, aes(SSB, Yield)) +
+  facet_wrap(~ name, scales = "free", ncol = 1) +
+  geom_path(data = obs, aes(SSB, Yield), inherit.aes = FALSE,
+            colour = bm_col("muted"), linewidth = 0.35, alpha = 0.75) +
+  geom_point(data = obs, aes(SSB, Yield), inherit.aes = FALSE,
+             colour = bm_col("ink"), size = 1.1, alpha = 0.45, stroke = 0) +
+  geom_line(colour = bm_col("catch"), linewidth = 0.75) +
+  labs(x = "SSB (t)", y = "Yield (t)") +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Production functions: equilibrium yield versus SSB (`r om_srr["cod.27.7e-k"]` Celtic Sea cod, `r om_srr["whg.27.7a"]` Irish Sea whiting). $B_{\mathrm{MSY}}$ and $F_{\mathrm{MSY}}$ on these curves are Operating Model properties, not ICES control points.
+
+```{r export, results="hide"}
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+
+dat = NULL
+for (id in sids) {
+  srr = unname(om_srr[id])
+  om  = oms[[id]]
+  ft  = openLoop[["SRR"]][[srr]][[id]]
+  ar  = closedLoop[["SRR"]][[srr]][[id]]
+  if (is.null(om) || is.null(ft) || is.null(ar))
+    stop("Missing time series for Excel export: ", id, call. = FALSE)
+  dat = rbind(dat,
+    cbind(What = "ICES",    sid = id,
+          model.frame(FLCore::metrics(om, list(SSB = ssb, Catch = catch)),
+                      drop = TRUE)),
+    cbind(What = "Ftarget", sid = id,
+          model.frame(FLCore::metrics(ft, list(SSB = ssb, Catch = catch)),
+                      drop = TRUE)),
+    cbind(What = "AR",      sid = id,
+          model.frame(FLCore::metrics(ar, list(SSB = ssb, Catch = catch)),
+                      drop = TRUE)))
+}
+if (is.null(dat) || !nrow(dat))
+  stop("Excel time series sheet is empty", call. = FALSE)
+
+ref = ldply(sids, function(id) {
+  ices = refpts(eqs[[id]])
+  om   = refpts(om_eq(id))
+  data.frame(
+    sid         = id,
+    stock       = as.character(stocks$name[match(id, stocks$sid)]),
+    om          = unname(om_srr[id]),
+    Ftarget     = c(ices["FMSY",        "harvest"]),
+    Blim        = c(ices["Blim",        "ssb"]),
+    MSYBtrigger = c(ices["MSYBtrigger", "ssb"]),
+    BMSY        = c(om["msy",           "ssb"]),
+    FMSY        = c(om["msy",           "harvest"]),
+    stringsAsFactors = FALSE)
+})
+if (!nrow(ref))
+  stop("Excel refpts sheet is empty", call. = FALSE)
+
+xlsx = file.path(root, "data/results/06.1.xlsx")
+wb = createWorkbook()
+addWorksheet(wb, "all")
+writeData(wb, "all", dat)
+freezePane(wb, "all", firstRow = TRUE)
+addWorksheet(wb, "refpts")
+writeData(wb, "refpts", ref)
+freezePane(wb, "refpts", firstRow = TRUE)
+saveWorkbook(wb, xlsx, overwrite = TRUE)
+```

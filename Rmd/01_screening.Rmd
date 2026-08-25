@@ -1,0 +1,510 @@
+---
+title: "Week 1 screening summary"
+subtitle: "Task 1 — confirmed case-study stocks, SAG status, and advice vs catch"
+author: "Laurence Kell\\Sea++"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+  word_document:
+    toc: true
+    fig_width: 7
+    fig_height: 5
+---
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root  ="C:/active/blueMarine"
+
+stocks=read.csv(file.path(root,"data/reference/stocks.csv"), stringsAsFactors=FALSE)
+stocks$name=factor(stocks$name, levels=unique(stocks$name))
+sids  =as.character(stocks$sid)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "01_screening"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE, 
+  warning   = FALSE, 
+  message   = FALSE, 
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "01_screening/"),
+  fig.path  = file.path(root, "tex/figs", "01_screening-"),
+  fig.width = 9, 
+  fig.height= 5, 
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLBacktest)
+  library(kableExtra)
+  library(jsonlite)
+  library(FLasher)
+})
+source(file.path(root, "R/plot_theme.R"))
+
+theme_set(theme_bluemarine_html())
+```
+
+```{r data}
+source("C:/active/blueMarine/R/loadStocks.R")
+
+oms = FLStocks(dlply(stocks, .(sid), function(x) loadFLStock(x,file.path(root,"data/WGCSE"))))
+oms = FLStocks(llply(oms, cleanStock))
+
+inventory = stockInventory(stocks, oms)
+```
+
+# Purpose
+
+Week~1 contract deliverable: screen candidate ICES Category~1 stocks, summarise
+SAG status and advice vs catch, compare local `FLStock` objects with SAG, and
+**confirm the case-study list** for the backtest.
+
+# Confirmed case-study stocks
+
+Local WGCSE `FLStock` objects from `data/WGCSE/`, windowed to each stock's
+advice year.
+
+
+**Table `r Tab = Tab + 1; Tab`**. Confirmed case-study stocks. Display
+`name`, ICES `sid`, WGCSE `rdata` file, and the R `object` inside that file
+come from `data/reference/stocks.csv`. Advice year is the terminal year used
+to window the `FLStock`.
+
+```{r stocks-inventory}
+knitr::kable(
+  inventory[, c("name", "sid", "rdata", "object")],
+  col.names = c("Stock", "SID", "RData", "Object"),
+  row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "condensed"))
+
+knitr::kable(
+  inventory[, c("name", "sid", "ices_area", "end", "minyear", "maxyear",
+                "minage", "maxage")],
+  col.names = c("Stock", "SID", "ICES area", "Advice",
+                "Min", "Max", "Min", "Max"),
+  row.names = FALSE,
+  align = c("l", "l", "l", rep("r", 5))) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "condensed")) %>%
+  add_header_above(c(" " = 3, "Year" = 3, "Age" = 2))
+```
+
+**Decision.** Proceed with all six stocks:
+
+1. Irish Sea cod (`cod.27.7a`)
+2. Irish Sea whiting (`whg.27.7a`)
+3. Celtic Sea cod (`cod.27.7e-k`)
+4. Celtic Sea whiting (`whg.27.7b-ce-k`)
+5. Celtic Sea haddock (`had.27.7b-k`)
+6. NE Atlantic mackerel (`mac.27.nea`)
+
+Irish Sea stocks use slightly earlier advice years than the Celtic Sea gadoids,
+reflecting available local assessment objects. Mackerel remains included as the
+Coastal States / ICES MSY-rule case study.
+
+# Screening summary
+
+Screening uses local assessments in `data/WGCSE/` and multi-year SAG downloads
+(assessment years 2014–2026) for status and reference points.
+
+## SAG coverage
+
+```{r load-sag}
+assYears = 2014:2026
+cache = file.path(root, "data/interim/sag_stocks.RData")
+dir.create(dirname(cache), recursive = TRUE, showWarnings = FALSE)
+
+if (file.exists(cache)) {
+  load(cache)
+} else {
+  sag = getSag(sids, assYears)
+  save(sag, file = cache)
+}
+
+sag$ts    = subset(sag$ts,    sid %in% sids)
+sag$rfpts = subset(sag$rfpts, sid %in% sids)
+
+sag_cov = ddply(sag$ts, .(sid), summarise,
+                assYears  = paste(range(assYear, na.rm = TRUE), collapse = "-"),
+                n_assYear = length(unique(assYear)))
+sag_cov = merge(stocks[, c("name", "sid")], sag_cov, by = "sid", all.x = TRUE)
+sag_cov = sag_cov[match(sids, sag_cov$sid), ]
+```
+
+**Table `r Tab = Tab + 1; Tab`**. SAG assessment-year coverage.
+
+```{r sag-coverage}
+knitr::kable(
+  sag_cov[, c("name", "sid", "assYears", "n_assYear")],
+  col.names = c("Stock", "SID", "Assessment years", "n"),
+  row.names = FALSE)
+```
+
+Celtic Sea gadoids and Irish Sea cod typically have about ten assessment years;
+Irish Sea whiting and mackerel have slightly fewer but still sufficient for
+screening. No stock was dropped solely for SAG incompleteness.
+
+## ICES advice vs reported catch
+
+Advised catch from the ICES Advice and Scenarios Database; reported catch from
+the latest SAG assessment year per stock.
+
+```{r asd-advice, fig.height=10, fig.width=10}
+advice = ldply(sids, function(sid) {
+  url = paste0("https://asd.ices.dk/API/getAdviceViewRecord?StockCode=",
+               URLencode(sid, reserved = TRUE))
+  d = tryCatch(fromJSON(url), error = function(e) NULL)
+  if (is.null(d) || !NROW(d)) return(NULL)
+  d = as.data.frame(d, stringsAsFactors = FALSE)
+  data.frame(
+    sid        = sid,
+    assYear    = as.integer(d$assessmentYear),
+    adviceYear = as.integer(substr(as.character(d$adviceApplicableFrom), 1, 4)),
+    advice     = suppressWarnings(as.numeric(d$adviceValue)),
+    stringsAsFactors = FALSE)
+})
+advice = merge(advice, stocks[, c("sid", "name")], by = "sid")
+advice = subset(advice, is.finite(adviceYear) & is.finite(advice))
+
+latest_ass = aggregate(assYear ~ sid, data = sag$ts, FUN = max)
+reported = merge(sag$ts, latest_ass, by = c("sid", "assYear"))
+reported = merge(reported, stocks[, c("sid", "name")], by = "sid")
+
+advice_plot = rbind(
+  data.frame(sid=advice$sid, year = advice$adviceYear,
+             series = "ICES advice", data = advice$advice,
+             stringsAsFactors = FALSE),
+  data.frame(sid=reported$sid, year = reported$year,
+             series = "Reported catch", data = reported$catch,
+             stringsAsFactors = FALSE))
+advice_plot       =subset(advice_plot, year >= 2010 & is.finite(data))
+advice_plot       =merge(advice_plot,stocks,by="sid")
+advice_plot$name  =factor(advice_plot$name, levels = levels(stocks$name))
+advice_plot$series=factor(advice_plot$series,
+                            levels = c("Reported catch", "ICES advice"))
+
+ggplot(advice_plot, aes(year, data, colour = series, linetype = series)) +
+  geom_line(linewidth = 0.85) +
+  geom_point(size = 1.2, alpha = 0.9) +
+  scale_catch_advice_colour() +
+  scale_catch_advice_linetype() +
+  facets_stock_row() +
+  labs(x = NULL, y = "Catch (t)", colour = NULL, linetype = NULL)
+
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. ICES advised catch (ASD) and reported catch (SAG).
+
+## Historical SSB retrospectives
+
+```{r sag-ssb, fig.height=10, fig.width=10}
+ts_plot = merge(sag$ts, stocks[, c("sid", "name")], by = "sid")
+ts_plot = subset(ts_plot, is.finite(ssb))
+ts_plot$name = factor(ts_plot$name, levels = levels(stocks$name))
+
+p_ssb = ggplot(ts_plot, aes(year, ssb, group = assYear, colour = factor(assYear))) +
+  geom_line(linewidth = 0.65, alpha = 0.9) +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(x = NULL, y = "SSB", colour = "Assessment") +
+  theme(legend.position = "bottom")
+p_ssb
+
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+ggsave(file.path(root, "tex/figs/week1_sag_ssb.pdf"), p_ssb,
+       width = 10, height = 8)
+ggsave(file.path(root, "tex/figs/week1_sag_ssb.png"), p_ssb,
+       width = 10, height = 8, dpi = 150)
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAG SSB by assessment year (retrospective fan).
+
+## Reference-point stability
+
+Reference points relative to the latest assessment year per stock
+(values near 1 indicate little revision).
+
+```{r sag-rfpts, fig.height=10, fig.width=11}
+rp_vars = intersect(c("fpa", "bpa", "blim", "fmsy", "msybtrigger"),
+                    names(sag$rfpts))
+rp_lbl  = c(fpa = "F[pa]", bpa = "B[pa]", blim = "B[lim]",
+            fmsy = "F[MSY]", msybtrigger = "MSYB[trigger]")
+
+rfs = do.call(rbind, lapply(rp_vars, function(v) {
+  data.frame(
+    sid = sag$rfpts$sid,
+    assYear = sag$rfpts$assYear,
+    qname = v,
+    data = sag$rfpts[[v]],
+    stringsAsFactors = FALSE)
+}))
+rfs = subset(rfs, is.finite(data) & data > 0)
+rfs = merge(rfs, stocks[, c("sid", "name")], by = "sid")
+rfs$name = factor(rfs$name, levels = levels(stocks$name))
+
+latest = aggregate(assYear ~ sid + qname, data = rfs, FUN = max)
+names(latest)[3] = "assYear_max"
+rfs = merge(rfs, latest, by = c("sid", "qname"))
+rfs_lat = subset(rfs, assYear == assYear_max)[, c("sid", "qname", "data")]
+names(rfs_lat)[3] = "data_latest"
+rfs = merge(rfs, rfs_lat, by = c("sid", "qname"))
+rfs$rel = rfs$data / rfs$data_latest
+rfs$qname = factor(as.character(rfs$qname), levels = rp_vars)
+
+ggplot(rfs, aes(assYear, rel)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4, alpha = 0.85) +
+  facet_grid(name ~ qname, scales = "free_y",
+             labeller = labeller(qname = as_labeller(rp_lbl, label_parsed))) +
+  labs(x = "Assessment year", y = "Relative to latest")
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAG reference points relative to the latest assessment.
+
+Across stocks, reference points are relatively stable once scaled to the latest
+assessment, with larger revisions mainly where benchmarks or advice frameworks
+changed.
+
+## Latest stock status
+
+**Table `r Tab = Tab + 1; Tab`**. Latest SAG terminal year.
+SSB: green above \(B_{\mathrm{trigger}}\), amber between \(B_{\lim}\) and
+\(B_{\mathrm{trigger}}\), red below \(B_{\lim}\);
+\(F/F_{\mathrm{MSY}}\): green at or below 1, red above.
+
+```{r sag-latest, results='asis'}
+latest_ass = aggregate(assYear ~ sid, data = sag$ts, FUN = max)
+ts_now = merge(sag$ts, latest_ass, by = c("sid", "assYear"))
+sag_now = do.call(rbind, lapply(split(ts_now, ts_now$sid), function(d) {
+  d = d[order(d$year), ]
+  ok = is.finite(d$ssb) & is.finite(d$f)
+  if (!any(ok)) ok = is.finite(d$ssb)
+  if (!any(ok)) ok = seq_len(nrow(d))
+  d[max(which(ok)),
+    c("sid", "assYear", "year", "ssb", "f", "rec", "catch"),
+    drop = FALSE]
+}))
+rownames(sag_now) = NULL
+
+rp_now = merge(sag$rfpts, latest_ass, by = c("sid", "assYear"))
+keep = intersect(c("fmsy", "blim", "msybtrigger", "fpa", "bpa"), names(rp_now))
+if (length(keep))
+  sag_now = merge(sag_now, rp_now[, c("sid", keep), drop = FALSE],
+                  by = "sid", all.x = TRUE)
+
+tab = merge(stocks[, c("name", "sid")], sag_now, by = "sid", all.x = TRUE)
+tab = tab[match(sids, tab$sid), ]
+tab$ssb_blim  = tab$ssb / tab$blim
+tab$ssb_btrig = tab$ssb / tab$msybtrigger
+tab$f_fmsy    = tab$f / tab$fmsy
+
+fmt_num = function(x, digits = 0)
+  ifelse(is.finite(x), formatC(x, format = "f", digits = digits), "")
+
+ssb_ratio_bg = ifelse(is.finite(tab$ssb_blim) & tab$ssb_blim < 1, "#F4CCCC",
+               ifelse(is.finite(tab$ssb_btrig) & tab$ssb_btrig < 1, "#FCE5CD",
+               ifelse(is.finite(tab$ssb_btrig), "#D9EAD3", "#FFFFFF")))
+ssb_blim_bg  = ifelse(!is.finite(tab$ssb_blim), "#FFFFFF",
+               ifelse(tab$ssb_blim < 1, "#F4CCCC", "#D9EAD3"))
+f_ratio_bg   = ifelse(!is.finite(tab$f_fmsy), "#FFFFFF",
+               ifelse(tab$f_fmsy > 1, "#F4CCCC", "#D9EAD3"))
+ssb_bg = ifelse(is.finite(tab$ssb) & is.finite(tab$blim) & tab$ssb < tab$blim,
+                "#F4CCCC",
+         ifelse(is.finite(tab$ssb) & is.finite(tab$msybtrigger) &
+                  tab$ssb < tab$msybtrigger,
+                "#FCE5CD",
+         ifelse(is.finite(tab$ssb), "#D9EAD3", "#FFFFFF")))
+
+out = data.frame(
+  name = tab$name,
+  assYear = tab$assYear,
+  year = tab$year,
+  ssb_btrig = fmt_num(tab$ssb_btrig, 2),
+  ssb_blim  = fmt_num(tab$ssb_blim, 2),
+  f_fmsy    = fmt_num(tab$f_fmsy, 2),
+  ssb = fmt_num(tab$ssb, 0),
+  f   = fmt_num(tab$f, 3),
+  fmsy = fmt_num(tab$fmsy, 3),
+  blim = fmt_num(tab$blim, 0),
+  msybtrigger = fmt_num(tab$msybtrigger, 0),
+  stringsAsFactors = FALSE)
+
+print(knitr::kable(
+  out, format = "html", escape = TRUE,
+  col.names = c("Stock", "Assessment", "Year",
+                "SSB/Btrig", "SSB/Blim", "F/FMSY",
+                "SSB", "F", "FMSY", "Blim", "MSYBtrigger"),
+  row.names = FALSE,
+  align = c("l", "r", "r", rep("r", 8))) %>%
+  kable_styling(full_width = FALSE,
+                bootstrap_options = c("striped", "condensed")) %>%
+  column_spec(4, background = ssb_ratio_bg) %>%
+  column_spec(5, background = ssb_blim_bg) %>%
+  column_spec(6, background = f_ratio_bg) %>%
+  column_spec(7, background = ssb_bg) %>%
+  column_spec(8, background = f_ratio_bg))
+```
+
+**Screening findings (status).**
+
+- **Celtic Sea cod** remains depleted (SSB well below \(B_{\lim}\)) with
+  \(F\) far above \(F_{\mathrm{MSY}}\) — a priority backtest case.
+- **Celtic Sea haddock** and **mackerel** are below \(B_{\mathrm{trigger}}\)
+  with \(F > F_{\mathrm{MSY}}\).
+- **Celtic Sea whiting** is below \(B_{\mathrm{trigger}}\) but with
+  \(F < F_{\mathrm{MSY}}\) in the latest SAG year.
+- **Irish Sea cod** is below \(B_{\lim}\) with very low recent \(F\) in SAG.
+- **Irish Sea whiting** SAG terminal years need care later; the stock is
+  retained with diagnostics flagged for assessment reconstruction.
+
+These contrasts support keeping the full set for a cross-stock synthesis of
+advice adherence.
+
+# SAG vs FLStock
+
+Scaled series using latest SAG reference points: SSB / \(B_{\mathrm{trigger}}\),
+\(\bar{F}/F_{\mathrm{MSY}}\), catch / MSY proxy
+(\(B_{\mathrm{trigger}}(1-e^{-F_{\mathrm{MSY}}})\)), recruitment / mean SAG
+recruitment.
+
+```{r sag-fl-compare, fig.height=10, fig.width=10}
+sag_ts = merge(sag$ts, latest_ass, by = c("sid", "assYear"))
+sag_ts = merge(sag_ts, stocks[, c("sid", "name")], by = "sid")
+sag_ts$source = "SAG"
+
+fl_ts = ldply(names(oms), function(id) {
+  stk = oms[[id]]
+  if (is.null(stk)) return(NULL)
+  df = model.frame(FLQuants(
+    ssb   = ssb(stk),
+    f     = fbar(stk),
+    rec   = stock.n(stk)[1],
+    catch = catch(stk)), drop = TRUE)
+  df$sid = id
+  df$source = "FLStock"
+  df
+})
+fl_ts = merge(fl_ts, stocks[, c("sid", "name")], by = "sid")
+
+scale_one = function(df, sag_now) {
+  ldply(split(df, df$sid), function(d) {
+    rp = sag_now[match(d$sid[1], sag_now$sid), ]
+    msy = if (is.finite(rp$msybtrigger) && is.finite(rp$fmsy))
+      rp$msybtrigger * (1 - exp(-rp$fmsy)) else NA_real_
+    rbar = mean(d$rec[d$source == "SAG"], na.rm = TRUE)
+    if (!is.finite(rbar) || rbar == 0)
+      rbar = mean(d$rec, na.rm = TRUE)
+    rbind(
+      data.frame(sid = d$sid, name = d$name, year = d$year,
+                 source = d$source, qname = "SSB",
+                 data = d$ssb / rp$msybtrigger, stringsAsFactors = FALSE),
+      data.frame(sid = d$sid, name = d$name, year = d$year,
+                 source = d$source, qname = "F",
+                 data = d$f / rp$fmsy, stringsAsFactors = FALSE),
+      data.frame(sid = d$sid, name = d$name, year = d$year,
+                 source = d$source, qname = "Catch",
+                 data = d$catch / msy, stringsAsFactors = FALSE),
+      data.frame(sid = d$sid, name = d$name, year = d$year,
+                 source = d$source, qname = "Rec",
+                 data = d$rec / rbar, stringsAsFactors = FALSE))
+  })
+}
+
+both = rbind(
+  sag_ts[, c("sid", "name", "year", "source", "ssb", "f", "rec", "catch")],
+  fl_ts[,  c("sid", "name", "year", "source", "ssb", "f", "rec", "catch")])
+cmp = scale_one(both, sag_now)
+cmp = subset(cmp, is.finite(data))
+cmp$name  = factor(cmp$name, levels = levels(stocks$name))
+cmp$qname = factor(cmp$qname, levels = c("SSB", "F", "Catch", "Rec"))
+
+ggplot(cmp, aes(year, data, colour = source)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+  geom_line(linewidth = 0.8) +
+  scale_colour_manual(values = c(SAG = "#1B9E77", FLStock = "#D95F02")) +
+  facet_grid(name ~ qname, scales = "free_y") +
+  labs(x = NULL, y = NULL, colour = NULL) +
+  theme(legend.position = "bottom",
+        strip.text.y = element_text(angle = 0))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAG vs `FLStock`, scaled by SAG reference points (line at 1).
+
+**Table `r Tab = Tab + 1; Tab`**. Terminal overlapping year on the scaled
+series (\(r\) = SAG/FL).
+
+```{r sag-fl-table}
+term = ddply(cmp, .(sid, name, qname), function(d) {
+  yrs = sort(intersect(d$year[d$source == "SAG"],
+                       d$year[d$source == "FLStock"]))
+  if (!length(yrs)) return(NULL)
+  y = max(yrs)
+  sag_v = d$data[d$source == "SAG" & d$year == y][1]
+  fl_v  = d$data[d$source == "FLStock" & d$year == y][1]
+  data.frame(year = y, SAG = sag_v, FL = fl_v, r = sag_v / fl_v)
+})
+
+qord = intersect(c("SSB", "F", "Catch", "Rec"), unique(as.character(term$qname)))
+term_wide = reshape(term[, c("name", "year", "qname", "SAG", "FL", "r")],
+                    idvar = c("name", "year"), timevar = "qname",
+                    direction = "wide")
+cols = unlist(lapply(qord, function(q) paste(c("SAG", "FL", "r"), q, sep = ".")))
+num = intersect(cols, names(term_wide))
+term_wide[num] = lapply(term_wide[num], function(x) round(x, 3))
+term_wide = term_wide[match(levels(stocks$name), term_wide$name),
+                      c("name", "year", cols)]
+
+knitr::kable(
+  term_wide,
+  col.names = c("Stock", "Year", rep(c("SAG", "FL", "r"), length(qord))),
+  row.names = FALSE,
+  align = c("l", "r", rep("r", length(cols)))) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "condensed")) %>%
+  add_header_above(c(" " = 2, setNames(rep(3, length(qord)), qord)))
+```
+
+# Implications for the backtest
+
+| Topic | Week~1 conclusion |
+|-------|-------------------|
+| Case studies | All six proposal stocks **confirmed** |
+| Advice rules | ICES MSY approach for gadoids; Coastal States / ICES MSY rule for mackerel |
+| Backtest window | Align peels with each stock's advice year and SAG coverage |
+| Priority contrasts | Depleted Celtic Sea cod vs mixed gadoid/mackerel status |
+| Next tasks | Assessment reconstruction; advice-rule coding; perfect-management counterfactuals |
+
+```{r save}
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+
+screening = list(
+  stocks    = stocks,
+  inventory = inventory,
+  sag       = sag,
+  sag_now   = sag_now,
+  sag_cov   = sag_cov,
+  advice    = advice,
+  oms       = oms,
+  cmp       = cmp,
+  term      = term,
+  date      = Sys.Date())
+save(screening, file = file.path(root, "data/results/01_screening.RData"))
+```
+
+Results saved to `data/results/01_screening.RData`.
+Downstream: `02.0_condition_om.Rmd` / `02.2_dynamics.Rmd`.

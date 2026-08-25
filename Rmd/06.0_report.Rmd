@@ -1,0 +1,590 @@
+---
+title: "Backtest of ICES Advice for Selected Northeast Atlantic Stocks"
+subtitle: "Draft report — historical backtest of ICES advice"
+author: "Laurence Kell, Sea++"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: flatly
+bibliography: ../tex/refs.bib
+---
+
+
+This document is the report. Notebooks in `Rmd/` are supplementary methods
+([`00_supplement.Rmd`](00_supplement.Rmd)). Observed productivity is
+time-varying $M$, mass and maturity plus SRR residuals — not climate.
+EqSim is an open-loop equilibrium simulation, not a closed-loop MSE.
+Paired Historical | Future figures below remain the **bh3** run already
+produced here; the readable single hypothesis in the generic OM note is
+**scn2** ([`06.2_generic.Rmd`](06.2_generic.Rmd)).
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root="C:/active/blueMarine"
+
+dir.create(file.path(root, "tex/figs"),               recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),           recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "Rmd/cache", "06.0_report"), recursive=TRUE, showWarnings=FALSE)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "06.0_report/"),
+  fig.path  = file.path(root, "tex/figs", "06.0_report-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplot2)
+  library(patchwork)
+  library(FLBacktest)
+  library(FLasher)
+  library(openxlsx)
+  if (requireNamespace("devtools", quietly = TRUE) &&
+      dir.exists("C:/active/flr/ggplotFL"))
+    suppressMessages(devtools::load_all("C:/active/flr/ggplotFL", quiet = TRUE))
+  else
+    library(ggplotFL)
+})
+
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/om.R"))
+theme_set(theme_bluemarine_html())
+
+# FLPar labels: ggplotFL::geom_flpar_lab (line colour / matching fill / label text)
+
+bm_series_cols = c(
+  Historical    = "#000000",
+  Ftarget       = "#0072B2",
+  "Advice rule" = "#D55E00")
+# Trajectories: all solid (distinct from dashed Blim / Btrig / Ftarget refs)
+bm_series_lty = c(
+  Historical    = "solid",
+  Ftarget       = "solid",
+  "Advice rule" = "solid")
+bm_series_lwd = 1.2
+bm_series_lab = c(
+  Historical    = "Historical",
+  Ftarget       = "Ftarget",
+  "Advice rule" = "Advice Rule")
+
+# ggplotFL plot(FLStocks) draws series via geom_flquantiles (default linewidth 0.5)
+style_traj = function(p, lwd = bm_series_lwd) {
+  for (i in seq_along(p$layers)) {
+    if (inherits(p$layers[[i]]$geom, "GeomLine"))
+      p$layers[[i]]$aes_params$linewidth = lwd
+  }
+  p
+}
+
+# Colour counterfactuals from `yr` (2004) so they join the historical series.
+# Keep the full year range; NA years before `yr` (window() dropped Ftarget).
+from_hcr = function(stk, yr, hist = NULL) {
+  out = stk
+  yrs = as.integer(dimnames(out)$year)
+  pre = as.character(yrs[yrs < yr])
+  if (length(pre)) {
+    stock.n(out)[, pre]    = NA
+    harvest(out)[, pre]    = NA
+    catch.n(out)[, pre]    = NA
+    landings.n(out)[, pre] = NA
+    discards.n(out)[, pre] = NA
+    catch(out)[, pre]      = NA
+    landings(out)[, pre]   = NA
+    discards(out)[, pre]   = NA
+  }
+  y0 = as.character(yr)
+  if (!is.null(hist) && y0 %in% dimnames(hist)$year &&
+      y0 %in% dimnames(out)$year) {
+    stock.n(out)[, y0]    = stock.n(hist)[, y0]
+    harvest(out)[, y0]    = harvest(hist)[, y0]
+    catch.n(out)[, y0]    = catch.n(hist)[, y0]
+    landings.n(out)[, y0] = landings.n(hist)[, y0]
+    discards.n(out)[, y0] = discards.n(hist)[, y0]
+    catch(out)[, y0]      = catch(hist)[, y0]
+    landings(out)[, y0]   = landings(hist)[, y0]
+    discards(out)[, y0]   = discards(hist)[, y0]
+  }
+  out
+}
+
+# Replace overlapping years with the assessment series used in the Historical plots
+paste_hist = function(stk, hist) {
+  yrs = intersect(dimnames(stk)$year, dimnames(hist)$year)
+  if (!length(yrs)) return(stk)
+  stock.n(stk)[, yrs]    = stock.n(hist)[, yrs]
+  harvest(stk)[, yrs]    = harvest(hist)[, yrs]
+  catch.n(stk)[, yrs]    = catch.n(hist)[, yrs]
+  landings.n(stk)[, yrs] = landings.n(hist)[, yrs]
+  discards.n(stk)[, yrs] = discards.n(hist)[, yrs]
+  catch(stk)[, yrs]      = catch(hist)[, yrs]
+  landings(stk)[, yrs]   = landings(hist)[, yrs]
+  discards(stk)[, yrs]   = discards(hist)[, yrs]
+  stk
+}
+
+# Historical left: 1990 (or first assessment year) to terminal year
+# Future right: 2000 through the 20-year HCR rebuild (04.3)
+hist_xmin   = 1990L
+future_xmin = 2000L
+
+# Union of y-ranges per facet so a Historical | Future pair shares SSB/F/Rec/Catch
+# scales. Independent x: Historical starts at hist_xmin (or first year); Future
+# starts at future_xmin and runs through the rebuild projection.
+share_facet_y = function(p_h, p_f, extra = NULL) {
+  qlev = levels(p_h$data$qname)
+  if (is.null(qlev))
+    qlev = unique(as.character(c(p_h$data$qname, p_f$data$qname)))
+  ymap = setNames(lapply(qlev, function(q) {
+    y = c(p_h$data$data[as.character(p_h$data$qname) == q],
+          p_f$data$data[as.character(p_f$data$qname) == q],
+          extra[[q]])
+    y[is.finite(y)]
+  }), qlev)
+  blank_for = function(p) {
+    yr = suppressWarnings(as.numeric(p$data$year))
+    x0 = if (!any(is.finite(yr))) future_xmin else min(yr[is.finite(yr)])
+    out = do.call(rbind, lapply(qlev, function(q) {
+      y = ymap[[q]]
+      if (!length(y)) return(NULL)
+      data.frame(year = x0, data = range(y), qname = q,
+                 stringsAsFactors = FALSE)
+    }))
+    if (is.null(out) || !nrow(out)) return(NULL)
+    qlev_p = levels(p$data$qname)
+    if (is.null(qlev_p))
+      qlev_p = unique(as.character(p$data$qname))
+    out$qname = factor(out$qname, levels = qlev_p)
+    out
+  }
+  bh = blank_for(p_h)
+  bf = blank_for(p_f)
+  if (!is.null(bh))
+    p_h = p_h + geom_blank(data = bh, aes(x = year, y = data),
+                           inherit.aes = FALSE)
+  if (!is.null(bf))
+    p_f = p_f + geom_blank(data = bf, aes(x = year, y = data),
+                           inherit.aes = FALSE)
+  list(historical = p_h, future = p_f)
+}
+
+qname_lab = labeller(qname = c(
+  F   = "F",
+  SB  = "SSB",
+  Rec = "Recruitment",
+  C   = "Catch"))
+```
+
+```{r load}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+load(file.path(root, "data/results/03.1_openLoop.RData"))
+load(file.path(root, "data/results/03.2_closedLoop.RData"))
+
+sids = as.character(stocks$sid)
+eqs  = eqls[["bh1"]]
+ar   = closedLoop[["SRR"]]
+srr  = "bh3"
+# First year drawn on the Historical figure (join to the assessment series).
+# Same rule as 04.1: 1990, or minyear+2 if the series starts after 1990.
+if (!exists("startYr"))
+  startYr = setNames(vapply(sids, function(id)
+    openloop_start(oms[[id]]), integer(1L)), sids)
+startYr_ftar = startYr
+startYr_ar   = 2015L
+nYears  = 20L
+
+ices_rp = function(id) {
+  rp = refpts(eqs[[id]])
+  c(Blim  = c(rp["Blim",        "ssb"]),
+    Btrig = c(rp["MSYBtrigger", "ssb"]),
+    FMSY  = c(rp["FMSY",        "harvest"]))
+}
+
+term_pt = function(x) {
+  if (dims(x)$iter > 1) c(iterMedians(x)) else c(x)
+}
+deterministic = all(c(
+  dims(oms[[sids[1]]])$iter,
+  dims(openLoop[["SRR"]][[srr]][[sids[1]]])$iter,
+  dims(ar[[srr]][[sids[1]]])$iter) == 1)
+```
+
+# What was done and why
+
+The practical problem is the gap between ICES Category 1 advice and what the fishery implemented. A second, related problem is how that advice is scored. ICES does not report $B_{\mathrm{MSY}}$. EqSim, as used at benchmarks, is an open-loop equilibrium simulation: it scans constant $F$ on an SRR fitted to assessment SSB–recruit pairs, typically a hockey-stick [@mesnil2010hockeystick; @punt2016msebestpractice]. It is not a closed-loop MSE. It does not simulate data, advice lag, the HCR, or catch implementation, so EqSim $F_{\mathrm{MSY}}$ is not a property of a closed management procedure [@winker2025precautionary].
+
+What ICES reports are **operational control points**: $B_{\lim}$, $MSYB_{\mathrm{trigger}}$ and $F_{\mathrm{target}}$. $B_{\lim}$ is typically the hockey-stick breakpoint. $MSYB_{\mathrm{trigger}}$ is then usually $B_{\mathrm{pa}} \approx 1.4 B_{\lim}$, not a percentile of $B_{\mathrm{MSY}}$ [@winker2026rebuilding; @winker2025precautionary]. After the breakpoint, expected recruitment is constant, so the production function is truncated. The SSB–recruit pairs are model outputs, not independent observations [@Winker2022InsideOut]. That is why ICES does not currently report $B_{\mathrm{MSY}}$. $MSYB_{\mathrm{trigger}}$ is an HCR threshold that reduces $F$ when SSB is low, not a biomass target [@winker2026rebuilding].
+
+The response was to condition WGCSE Category 1 assessments as age-structured `FLStock` Operating Models, impose a hard gate, and run a historical backtest: same OM, two policies. Open loop is `fwd` at ICES $F_{\mathrm{target}}$ from about 1990. Closed loop is `hcrICES` from 2015. The Historical window replays observed productivity (time-varying $M$, mass and maturity plus SRR residuals). The Future window uses mean recruitment. ICES HCR inputs stay the published SAG values on **bh1**. Operating Model $B_{\mathrm{MSY}}$ and $F_{\mathrm{MSY}}$ come from the SRR that projects the stock. Alternative SRRs (bh1–rk3, scn0–scn2) sit in `eqls`. This report presents **scn2** as the readable single hypothesis; funder case studies used scn2 for Irish Sea whiting and scn0 for Celtic Sea cod. Implementation is in the supplement, not repeated here.
+
+# Frame of this report
+
+This document is the report. The `Rmd/` chain **is** the supplementary methods ([`00_supplement.Rmd`](00_supplement.Rmd)). Knit order is inventory (`01`), condition (`02.0`), gate (`02.1` / `02.2`), generic backtest (`04.1` / `04.2`), Future (`04.3`), digest (`05.0`), case studies (`06.1`), generic OM (`06.2`). This notebook loads results and holds the contract figures; it does not re-run the simulations. Optional off-path: SAM OEM (`04.4`), SRR note (`07`).
+
+Time series, residuals, dynamic $B_0$, SRR and production figures that carry the scn2 argument are in [`06.1_TwoStocks.Rmd`](06.1_TwoStocks.Rmd) and [`06.2_generic.Rmd`](06.2_generic.Rmd). The paired Historical | Future figures **below** remain the **bh3** run already produced here (Beverton–Holt with an $R_0$ prior from $MSYB_{\mathrm{trigger}}/B_{\lim}$). bh3 is a related compensatory hypothesis, not scn2. Captions say bh3; `06.2` says scn2. Rebuild years quoted from these panels are therefore bh3.
+
+For the Irish and Celtic Sea gadoids, $MSYB_{\mathrm{trigger}}$ is the ICES SAG value. For Northeast Atlantic mackerel the 2025 advice sheet sets $MSYB_{\mathrm{trigger}}=B_{\mathrm{pa}}$ (4,119,337 t), matching the SAG row used at conditioning. Recent mackerel benchmarks changed the assessment substantially; the stock is retained for completeness. One OM is shown for readability; structural uncertainty remains in `eqls`.
+
+The lift-able prose draft is `docs/report_draft.md`.
+
+# Results
+
+Terminal assessment status versus ICES points is from [`05.0_digest.Rmd`](05.0_digest.Rmd) Table 1 (Historical column is the assessment; open- and closed-loop columns there are **bh1**). ICES advice-sheet status (Table 1 layout) and ICES points versus scn2 $B_{\mathrm{MSY}}$ are in [`06.2_generic.Rmd`](06.2_generic.Rmd). The `06.1` take-home covers Celtic Sea cod (scn0) and Irish Sea whiting (scn2).
+
+All six stocks sit below $B_{\lim}$ on the current advice sheets in `docs/advice`. Realised $\bar F$ exceeds ICES $F_{\mathrm{target}}$ except in Irish Sea cod, where $\bar F / F_{\mathrm{target}} \approx 0.07$ (`05.0`) and the 2026 sheet has $F$ below $F_{\mathrm{MSY}}$. Celtic Sea haddock is above $F_{\mathrm{MSY}}$ but below $F_{\mathrm{pa}}$ (2026 sheet). Celtic Sea cod is far below $B_{\lim}$ (SSB / trigger $= 0.02$; $F / F_{\mathrm{target}} = 4.44$). Irish Sea whiting is below $B_{\lim}$ (SSB / trigger $= 0.68$) with $F / F_{\mathrm{target}} = 4.75$; the 2025 sheet has $F$ above $F_{\mathrm{MSY}}$ and $F_{\mathrm{pa}}$. Celtic Sea whiting, haddock and mackerel are 0.22, 0.63 and 0.77 of trigger, with $F / F_{\mathrm{target}}$ of 1.42, 1.78 and 1.39.
+
+On scn2, $MSYB_{\mathrm{trigger}}/B_{\mathrm{MSY}}$ is not one (`06.2` Table 2): Celtic Sea cod 0.07, Irish Sea whiting 0.33, Celtic Sea haddock 0.44, Irish Sea cod 1.26, Celtic Sea whiting 1.37, mackerel 1.40. Scoring against ICES points and against Operating Model MSY can disagree in either direction. $F_{\mathrm{target}}$ and Operating Model $F_{\mathrm{MSY}}$ also differ (Irish Sea cod 0.171 versus 0.410; mackerel 0.191 versus 0.895).
+
+Where historical $F$ was well above $F_{\mathrm{target}}$, fishing at $F_{\mathrm{target}}$ from 1990 produces a large biomass gain. On the `05.0` bh1 digest, terminal SSB / trigger under constant $F_{\mathrm{target}}$ is 5.10 for Irish Sea whiting and 8.21 for Celtic Sea cod (Historical 0.68 and 0.02). The advice rule from 2015 also lifts those stocks (3.85 and 3.45) but is not the same experiment: it starts later and only sets $F = F_{\mathrm{target}}$ once SSB is at or above the trigger. The `06.1` take-home is the same pattern on the case-study OMs. Irish Sea cod is the opposite: fishing *at* $F_{\mathrm{target}}$ lowers terminal SSB relative to the assessment (`05.0`: 0.54 Historical, 0.28 $F_{\mathrm{target}}$, 0.35 advice rule). Residuals and STARS in `06.1` / `06.2` are the productivity history replayed in the hindcast, not SST [@Lindmark2026productivity]. Future panels switch that history off.
+
+## Historical
+
+Historical is the hindcast: what $F$, SSB, recruitment and catch would have been from 1990 had harvest followed $F_{\mathrm{target}}$ rather than the realised fishery. **Current** is the terminal year of that window. The paired figures below are **bh3**. scn2 figures are in [`06.2_generic.Rmd`](06.2_generic.Rmd); case studies in [`06.1_TwoStocks.Rmd`](06.1_TwoStocks.Rmd). Annual series from these panels go to `r file.path("data/results", "06.0_results.xlsx")`.
+
+The $F_{\mathrm{target}}$ line is ICES $F_{\mathrm{target}}$ from SAG; the shaded $F$ band is Operating Model $F_{\mathrm{MSY}}$ from the reference-case (bh3) equilibrium. On the figures, $F_{\mathrm{target}}$ is shown from 1990 (or two years after the first assessment year if later) on the left and the Advice rule from `r startYr_ar` on the right (set in the load chunk). Each stock is a pair: Historical (left) and Future (right), with shared $F$, SSB, recruitment and catch scales. Historical x-axes start in `r hist_xmin` (or the first assessment year if later) and run to the terminal year, with Historical and $F_{\mathrm{target}}$ only. Future x-axes start in `r future_xmin` and run through the twenty-year HCR rebuild, with Historical and the Advice rule.
+
+```{r backtest-closed-hcr, fig.height=8, fig.width=14}
+rebuild_file = file.path(root, "data/results/04.3_rebuild.RData")
+future = NULL
+if (file.exists(rebuild_file)) {
+  e = new.env()
+  load(rebuild_file, envir = e)
+  future = e$future
+} else {
+  cat("Knit 04.3_rebuild.Rmd first to produce Future trajectories.\n")
+}
+
+win_stk = function(stk, start, end = NULL) {
+  start = max(dims(stk)$minyear, start)
+  if (is.null(end))
+    window(stk, start = start)
+  else
+    window(stk, start = start, end = min(dims(stk)$maxyear, end))
+}
+
+for (id in sids) {
+  nm   = as.character(subset(stocks, sid == id)[, "name"])
+  rp   = refpts(eqls[[srr]][[id]])
+  bmsy = c(rp["msy", "ssb"])
+  fmsy = c(rp["msy", "harvest"])
+  r0   = c(rp["virgin", "rec"])
+  cmsy = c(rp["msy", "yield"])
+  ices = ices_rp(id)
+  minyr = dims(oms[[id]])$minyear
+  maxyr = dims(oms[[id]])$maxyear
+  win_start = max(minyr, hist_xmin)
+  win_end   = maxyr
+  x_right = win_end - 2
+  shade = data.frame(
+    qname = factor(c("F", "SB"), levels = c("F", "SB", "Rec", "C")),
+    xmin = win_start, xmax = win_end)
+  # Left: Historical + Ftarget only (no Advice rule)
+  p_h = plot(FLStocks(
+    "Historical" = win_stk(oms[[id]], win_start, win_end),
+    "Ftarget"    = win_stk(from_hcr(openLoop[["SRR"]][[srr]][[id]],
+                                    startYr_ftar[id], oms[[id]]),
+                           win_start, win_end)),
+             metrics = list(F = fbar, SB = ssb, Rec = rec, C = catch)) +
+        scale_x_continuous(limits = c(win_start, win_end)) +
+        scale_colour_manual(values = bm_series_cols[c("Historical", "Ftarget")],
+                            breaks = c("Historical", "Ftarget"),
+                            labels = bm_series_lab[c("Historical", "Ftarget")]) +
+        scale_fill_manual(values = bm_series_cols[c("Historical", "Ftarget")],
+                          guide = "none") +
+        aes(linetype = stock) +
+        scale_linetype_manual(values = bm_series_lty[c("Historical", "Ftarget")],
+                              breaks = c("Historical", "Ftarget"),
+                              labels = bm_series_lab[c("Historical", "Ftarget")]) +
+        labs(title = paste0(nm, " — Historical")) +
+        facet_grid(qname ~ ., scales = "free_y", labeller = qname_lab)
+  p_h = style_traj(p_h)
+  # Year markers and ICES / OM refs after trajectories so they overlie the series
+  p_h = p_h +
+        geom_vline(xintercept = unname(startYr_ftar[id]), linetype = 3,
+                   colour = unname(bm_series_cols["Ftarget"])) +
+        geom_flpar_lab(data = FLPars(SB = FLPar("BTrig" = ices[["Btrig"]])),
+          x = 2010, colour = bm_col("trigger"), linetype = 2) +
+        geom_flpar_lab(data = FLPars(SB = FLPar("Blim" = ices[["Blim"]])),
+          x = 2010, colour = "red", linetype = 2) +
+        geom_flpar_lab(data = FLPars(F = FLPar("Ftarget" = ices[["FMSY"]])),
+          x = 2010, colour = bm_col("f_target"), linetype = 2) +
+        geom_flpar_lab(data = FLPars(Rec = FLPar("R0" = r0)),
+          x = x_right, colour = "darkgreen", fill = "green", linetype = 1) +
+        geom_flpar_lab(data = FLPars(Rec = FLPar("0.2R0" = 0.2 * r0)),
+          x = x_right, colour = "red", fill = "red", linetype = 1) +
+        geom_flpar_lab(data = FLPars(C = FLPar("MSY" = cmsy)),
+          x = x_right, colour = bm_col("muted"), fill = bm_col("strip_fill"),
+          linetype = 1)
+  bad = rbind(
+    transform(subset(shade, qname == "SB"), ymin = -Inf, ymax = bmsy),
+    transform(subset(shade, qname == "F"),  ymin = fmsy, ymax = Inf))
+  below = geom_rect(data = bad,
+                    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+                    inherit.aes = FALSE, fill = bm_col("trigger"),
+                    alpha = 0.12, colour = NA)
+  p_h$layers = c(list(below), p_h$layers)
+
+  if (is.null(future)) {
+    print(p_h)
+    next
+  }
+
+  hist_stk = paste_hist(future[["Historical"]][[id]], oms[[id]])
+  hist_stk = win_stk(hist_stk, future_xmin)
+  ar_stk  = from_hcr(paste_hist(future[["Advice rule"]][[id]],
+                               ar[[srr]][[id]]),
+                    startYr_ar, oms[[id]])
+  ar_stk  = win_stk(ar_stk, future_xmin)
+  # Last year of the 04.3 rebuild (not a 2026 cutoff)
+  future_xmax = as.integer(max(dims(hist_stk)$maxyear,
+                               dims(ar_stk)$maxyear,
+                               na.rm = TRUE))
+  xmax = future_xmax
+  x_right_f = xmax - 2
+  shade_f = data.frame(
+    qname = factor(c("F", "SB"), levels = c("F", "SB", "Rec", "C")),
+    xmin = future_xmin, xmax = xmax)
+  p_f = plot(FLStocks("Historical"  = hist_stk,
+                      "Advice rule" = ar_stk),
+             metrics = list(F = fbar, SB = ssb, Rec = rec, C = catch)) +
+    scale_x_continuous(limits = c(future_xmin, xmax)) +
+    scale_colour_manual(values = bm_series_cols[c("Historical", "Advice rule")],
+                        labels = bm_series_lab[c("Historical", "Advice rule")]) +
+    scale_fill_manual(values = bm_series_cols[c("Historical", "Advice rule")],
+                      guide = "none") +
+    aes(linetype = stock) +
+    scale_linetype_manual(values = bm_series_lty[c("Historical", "Advice rule")],
+                          labels = bm_series_lab[c("Historical", "Advice rule")]) +
+    labs(title = paste0(nm, " — Future")) +
+    facet_grid(qname ~ ., scales = "free_y", labeller = qname_lab)
+  p_f = style_traj(p_f)
+  # Year markers and ICES / OM refs after trajectories so they overlie the series
+  p_f = p_f +
+    geom_vline(xintercept = startYr_ar, linetype = 3,
+               colour = unname(bm_series_cols["Advice rule"])) +
+    geom_vline(xintercept = maxyr, linetype = 3, colour = bm_col("muted")) +
+    geom_flpar_lab(data = FLPars(SB = FLPar("BTrig" = ices[["Btrig"]])),
+      x = 2010, colour = bm_col("trigger"), linetype = 2) +
+    geom_flpar_lab(data = FLPars(SB = FLPar("Blim" = ices[["Blim"]])),
+      x = 2010, colour = "red", linetype = 2) +
+    geom_flpar_lab(data = FLPars(F = FLPar("Ftarget" = c(ices[["FMSY"]]))),
+      x = 2010, colour = bm_col("f_target"), linetype = 2) +
+    geom_flpar_lab(data = FLPars(Rec = FLPar("R0" = r0)),
+      x = x_right_f, colour = "darkgreen", fill = "green", linetype = 1) +
+    geom_flpar_lab(data = FLPars(Rec = FLPar("0.2R0" = 0.2 * r0)),
+      x = x_right_f, colour = "red", fill = "red", linetype = 1) +
+    geom_flpar_lab(data = FLPars(C = FLPar("MSY" = cmsy)),
+      x = x_right_f, colour = bm_col("muted"), fill = bm_col("strip_fill"),
+      linetype = 1)
+  bad_f = rbind(
+    transform(subset(shade_f, qname == "SB"), ymin = -Inf, ymax = bmsy),
+    transform(subset(shade_f, qname == "F"),  ymin = fmsy, ymax = Inf))
+  below_f = geom_rect(data = bad_f,
+                      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+                      inherit.aes = FALSE, fill = bm_col("trigger"),
+                      alpha = 0.12, colour = NA)
+  p_f$layers = c(list(below_f), p_f$layers)
+
+  extra = list(
+    F   = c(ices[["FMSY"]], fmsy),
+    SB  = c(ices[["Btrig"]], ices[["Blim"]], bmsy),
+    Rec = c(r0, 0.2 * r0),
+    C   = cmsy)
+  paired = share_facet_y(p_h, p_f, extra)
+  print(paired$historical | paired$future)
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Historical (left) and Future (right) for each stock, with shared $F$, SSB, recruitment and catch scales within a stock and independent x-axes. **Left.** Black is the historical assessment. $F_{\mathrm{target}}$ starts in 1990, or two years after the first assessment year if later (vertical line), joining the historical series, then the open-loop backtest on the reference-case (bh3) Operating Model. Advice rule is not shown on the left. The x-axis runs from `r hist_xmin` (or the first assessment year if later) to the terminal year. **Right.** The same historical assessment (black) as on the left. Advice rule peels off from `r startYr_ar` (vertical line), then the twenty-year HCR rebuild from each terminal state (04.3; reference-case Operating Model, mean biology, mean recruitment). Two series only on the right; there is no $F_{\mathrm{target}}$ trajectory. The Future x-axis starts in `r future_xmin` and runs through the rebuild (terminal year + `r nYears` years). Vertical lines are the Advice-rule start and the terminal year. $B_{\lim}$ and $B_{\mathrm{trigger}}$ are ICES SAG values. The $F_{\mathrm{target}}$ line (left) and dashed $F_{\mathrm{target}}$ (both) are ICES $F_{\mathrm{target}}$; $F$ shading is Operating Model $F_{\mathrm{MSY}}$. SSB is shaded below Operating Model $B_{\mathrm{MSY}}$. Recruitment lines are virgin $R_0$ (green) and 20% of $R_0$ (red). Catch has a line at MSY.
+
+All six stocks are below $B_{\lim}$ on the current advice sheets. Realised $F$ exceeds ICES $F_{\mathrm{target}}$ except in Irish Sea cod (below $F_{\mathrm{MSY}}$ on the 2026 sheet). Constant $F_{\mathrm{target}}$ rebuilds Irish Sea whiting and Celtic Sea cod to several times $B_{\mathrm{trigger}}$. The Advice rule sets $F = F_{\mathrm{target}}$ once SSB is above the trigger (about a one-year lag); the useful contrast is how far each stock sits below $B_{\lim}$ / the trigger, and how much SSB the Advice rule gains or loses relative to Historical.
+
+Annual SSB and catch for Historical, $F_{\mathrm{target}}$, and Advice rule are written to `r file.path("data/results", "06.0_results.xlsx")` (years as rows, series as columns, one sheet per stock, plus `all` and `notes`).
+
+```{r results-export}
+# Annual SSB and catch: Historical (oms), Ftarget (open loop from 1990),
+# Advice rule (closed loop from 2015, then future HCR). Same definitions as the plots.
+results_xlsx = file.path(root, "data/results/06.0_results.xlsx")
+
+quant_at = function(stk, fun, yrs) {
+  x = fun(stk)
+  if (dims(x)$iter > 1)
+    x = iterMedians(x)
+  out = rep(NA_real_, length(yrs))
+  dn  = as.integer(dimnames(x)$year)
+  m   = match(yrs, dn)
+  ok  = !is.na(m)
+  out[ok] = as.numeric(x)[m[ok]]
+  out
+}
+
+if (is.null(future) && file.exists(rebuild_file)) {
+  e = new.env()
+  load(rebuild_file, envir = e)
+  future = e$future
+}
+
+series_wide = list()
+series_tidy = list()
+first_year  = setNames(integer(length(sids)), sids)
+
+for (id in sids) {
+  nm    = as.character(subset(stocks, sid == id)[, "name"])
+  maxyr = dims(oms[[id]])$maxyear
+  minyr = dims(oms[[id]])$minyear
+  first_year[id] = minyr
+  hist_stk = oms[[id]]
+  ftar_stk = from_hcr(openLoop[["SRR"]][[srr]][[id]], startYr_ftar[id], oms[[id]])
+  ar_stk   = from_hcr(ar[[srr]][[id]], startYr_ar, oms[[id]])
+  if (!is.null(future)) {
+    hist_stk = paste_hist(future[["Historical"]][[id]], oms[[id]])
+    ar_stk   = from_hcr(paste_hist(future[["Advice rule"]][[id]],
+                                   ar[[srr]][[id]]),
+                        startYr_ar, oms[[id]])
+  }
+  y_end = max(c(dims(hist_stk)$maxyear, dims(ftar_stk)$maxyear,
+                dims(ar_stk)$maxyear), na.rm = TRUE)
+  yrs = seq(minyr, y_end)
+  wide = data.frame(
+    year              = yrs,
+    SSB_Historical    = quant_at(hist_stk, ssb,   yrs),
+    SSB_Ftarget       = quant_at(ftar_stk, ssb,   yrs),
+    SSB_AdviceRule    = quant_at(ar_stk,   ssb,   yrs),
+    Catch_Historical  = quant_at(hist_stk, catch, yrs),
+    Catch_Ftarget     = quant_at(ftar_stk, catch, yrs),
+    Catch_AdviceRule  = quant_at(ar_stk,   catch, yrs),
+    stringsAsFactors  = FALSE)
+  series_wide[[id]] = wide
+  tidy = rbind(
+    data.frame(stock = nm, sid = id, year = yrs, series = "Historical",
+               ssb = wide$SSB_Historical, catch = wide$Catch_Historical,
+               stringsAsFactors = FALSE),
+    data.frame(stock = nm, sid = id, year = yrs, series = "Ftarget",
+               ssb = wide$SSB_Ftarget, catch = wide$Catch_Ftarget,
+               stringsAsFactors = FALSE),
+    data.frame(stock = nm, sid = id, year = yrs, series = "Advice rule",
+               ssb = wide$SSB_AdviceRule, catch = wide$Catch_AdviceRule,
+               stringsAsFactors = FALSE))
+  tidy = tidy[!(is.na(tidy$ssb) & is.na(tidy$catch)), ]
+  series_tidy[[id]] = tidy
+}
+
+all_tidy = do.call(rbind, series_tidy)
+rownames(all_tidy) = NULL
+all_tidy$stock = factor(all_tidy$stock, levels = levels(stocks$name))
+all_tidy = all_tidy[order(all_tidy$stock, all_tidy$series, all_tidy$year), ]
+
+ssb_units   = units(ssb(oms[[sids[1]]]))
+catch_units = units(catch(oms[[sids[1]]]))
+late = sids[first_year[sids] > hist_xmin]
+late_note = if (!length(late)) {
+  "All six stocks have assessment years from 1990."
+} else {
+  paste0("Assessment starts after 1990: ",
+         paste(sprintf("%s (%s, %d)",
+                       as.character(stocks$name[match(late, stocks$sid)]),
+                       late,
+                       as.integer(first_year[late])),
+               collapse = "; "),
+         ".")
+}
+
+notes = data.frame(
+  item = c(
+    "File",
+    "Units SSB",
+    "Units catch",
+    "Historical",
+    "Ftarget",
+    "Advice rule",
+    "Left plot window",
+    "Right plot window",
+    "Assessment start"),
+  value = c(
+    "data/results/06.0_results.xlsx",
+    ssb_units,
+    catch_units,
+    "WGCSE assessment (oms). After the terminal year, 20-year HCR from that terminal state (right-panel black line).",
+    paste0("Open-loop projection at ICES Ftarget from 1990 ",
+           "(or two years after the first assessment year if later) ",
+           "through the terminal year (left panel). No future extension."),
+    paste0("Closed-loop MSE from ", startYr_ar,
+           ", then ICES HCR after the terminal year (right panel)."),
+    paste0(hist_xmin, " (or first assessment year) to terminal year; Historical + Ftarget."),
+    paste0(future_xmin, " through terminal + ", nYears,
+           "-year HCR rebuild; Historical + Advice rule."),
+    late_note),
+  stringsAsFactors = FALSE)
+
+wb = createWorkbook()
+hs = createStyle(textDecoration = "bold", halign = "center")
+addWorksheet(wb, "notes")
+writeData(wb, "notes", notes, headerStyle = hs)
+setColWidths(wb, "notes", cols = 1:2, widths = c(22, 100))
+addWorksheet(wb, "all")
+writeData(wb, "all", all_tidy, headerStyle = hs)
+freezePane(wb, "all", firstRow = TRUE)
+setColWidths(wb, "all", cols = 1:6, widths = "auto")
+for (id in sids) {
+  nm = as.character(subset(stocks, sid == id)[, "name"])
+  addWorksheet(wb, nm)
+  writeData(wb, nm, series_wide[[id]], headerStyle = hs)
+  freezePane(wb, nm, firstRow = TRUE)
+  setColWidths(wb, nm, cols = 1:7, widths = "auto")
+}
+saveWorkbook(wb, results_xlsx, overwrite = TRUE)
+invisible(NULL)
+```
+
+## Current
+
+Current is the terminal year of the Historical window: SSB relative to ICES $MSYB_{\mathrm{trigger}}$, absolute $\bar F$, and $\bar F$ relative to ICES $F_{\mathrm{target}}$, for Historical, $F_{\mathrm{target}}$, and Advice rule. `r if (deterministic) "Point values from a deterministic run." else "Iteration medians."` Reference-case Operating Model (bh3). Under $F_{\mathrm{target}}$, $F/F_{\mathrm{target}}$ is 1 by construction.
+
+### Irish Sea cod {.unnumbered}
+
+Historical $\bar F$ is already well below $F_{\mathrm{target}}$ ($F/F_{\mathrm{target}} \approx 0.07$), so fishing at $F_{\mathrm{target}}$ **lowers** terminal SSB relative to Historical ($F_{\mathrm{target}}$ and Advice rule SSB/$B_{\mathrm{trigger}}$ both below the Historical ratio). That is the opposite of the other depleted gadoids, where the Advice rule would have cut $F$. Two mechanisms can produce a realised $F$ this far below the ICES target, and this backtest does not separate them. One is mixed-fishery constraint: Irish Sea cod has been treated as a recovery / choke stock, so catch can sit well below a single-stock TAC even when the Advice rule would allow $F_{\mathrm{target}}$. The other is a reference-point mismatch: ICES $F_{\mathrm{target}}$ is the SAG value used as an HCR input, whereas Operating Model $F_{\mathrm{MSY}}$ is a different equilibrium quantity on the reference-case Operating Model — for this stock the Operating Model value is higher than ICES $F_{\mathrm{target}}$, yet both are far above historical $\bar F$.
+
+## Future
+
+Future is the 20-year HCR run from each Historical-window terminal state (Supplementary Methods, [20-year rebuild](04.3_rebuild.Rmd)): longer than the ICES 1–2 year advice forecast, mean biology, mean recruitment, and not a stochastic forecast. The right-hand panels above show SSB, $F$, recruitment and catch from `r future_xmin` through that rebuild. The Advice-rule series is the closed-loop trajectory from `r startYr_ar` (right panels only), then the HCR projection after the terminal year. The dashed $F_{\mathrm{target}}$ line is ICES $F_{\mathrm{target}}$; $F$ shading is Operating Model $F_{\mathrm{MSY}}$. Rebuild times discussed below are from the reference-case (bh3) Operating Model.
+
+$B_{\mathrm{trigger}}$ is the ICES advice threshold; reaching it does not imply Operating Model $B_{\mathrm{MSY}}$. Irish Sea whiting reaches $B_{\mathrm{trigger}}$ in 2 years from Historical and $B_{\mathrm{MSY}}$ in 7; the Advice-rule start is already above both. Mackerel is already above $B_{\mathrm{MSY}}$ while still below the trigger. Irish Sea cod reaches $B_{\mathrm{MSY}}$ first because that biomass sits below ICES $B_{\mathrm{trigger}}$.
+
+### Celtic Sea whiting {.unnumbered}
+
+Under this reference-case Future run, Celtic Sea whiting never reaches ICES $B_{\mathrm{trigger}}$ in 20 years from either start, but it does reach Operating Model $B_{\mathrm{MSY}}$ in about 16–18 years. ICES $MSYB_{\mathrm{trigger}}$ sits materially above Operating Model $B_{\mathrm{MSY}}$ on this scenario, so the advice threshold is not a proxy for MSY biomass. A 20-year mean-recruitment HCR can look like a successful rebuild against the Operating Model yardstick while remaining below trigger on the ICES scale.
+
+### Celtic Sea cod {.unnumbered}
+
+From the Historical terminal state, ICES $B_{\mathrm{trigger}}$ is reached in about 9 years; Operating Model $B_{\mathrm{MSY}}$ is not reached in 20 years from either start. The Advice-rule start (bh3 closed-loop terminal state) is already above the trigger (0 years), but that still leaves the stock short of Operating Model $B_{\mathrm{MSY}}$. Rebuild to the ICES trigger and rebuild to MSY biomass are different targets under this scenario.
+
+# Main findings
+
+Implementation of the ICES advice rule is not the historical fishery. Open-loop $F_{\mathrm{target}}$ and the closed-loop HCR answer different questions, and historical $F$ was often neither. Irish Sea cod, with $\bar F \approx 0.07\times F_{\mathrm{target}}$, shows that fishing at the ICES target can reduce SSB relative to what occurred. Celtic Sea cod and Irish Sea whiting show the converse.
+
+$MSYB_{\mathrm{trigger}}$ is not $B_{\mathrm{MSY}}$. It is an HCR threshold, usually a $B_{\mathrm{pa}}$ proxy [@winker2026rebuilding]. On scn2, $MSYB_{\mathrm{trigger}}/B_{\mathrm{MSY}}$ ranges from 0.07 (Celtic Sea cod) to 1.40 (mackerel) (`06.2` Table 2). Scoring against ICES operational points and against Operating Model MSY can disagree, in either direction.
+
+The hockey-stick is the shape of the ICES HCR, not Operating Model truth. Residuals replayed in the Historical window are observed productivity, not climate [@Lindmark2026productivity]. The Future window uses mean recruitment; the two windows are different experiments. One OM is shown for readability; structural uncertainty remains in `eqls`.
+
+# Next steps
+
+Remaining gated stocks: [`05.0_digest.Rmd`](05.0_digest.Rmd); `06.2` already standardises the current gate on scn2. Optional SAM observation error ([`04.4_closedLoop_sam.Rmd`](04.4_closedLoop_sam.Rmd)) is a robustness check, not the base case. Peer-review paper: `docs/paper_outline.md`. Reinstall the Historical | Future figures in this notebook on scn2 if the contract report is to match `06.2`; they currently remain bh3. This report does not offer climate-forced recruitment projections.
+
+# References {.unnumbered}

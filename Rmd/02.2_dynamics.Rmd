@@ -1,0 +1,752 @@
+---
+title: "Stock and Operating Model dynamics"
+subtitle: "Task 3 — dynamics, SPR0, process error, fwd vs FLBRP, realised status"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+mathjax: true
+---
+
+# Purpose
+
+Summarise **historical dynamics** and Operating Model diagnostics for the six case-study
+stocks, and check that long-term `FLasher::fwd` at \(F_{\mathrm{MSY}}\)
+matches `FLBRP` before the Operating Models are treated as final. Operating Models
+themselves are built in
+[`02.0_condition_om.Rmd`](02.0_condition_om.Rmd) (`oms`, `eqs`, `eqls`).
+The detailed 50-year trajectories are in
+[`02.1_lterm_eq.Rmd`](02.1_lterm_eq.Rmd).
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+root <- "C:/active/blueMarine"
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/interim/03.0_om"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "02.2_dynamics"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE, 
+  warning   = FALSE, 
+  message   = FALSE, 
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "02.2_dynamics/"),
+  fig.path  = file.path(root, "tex/figs", "02.2_dynamics-"),
+  fig.width = 9, 
+  fig.height= 5, 
+  dev       ="png")
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLBacktest)
+  library(reshape2)
+  library(data.table)
+  library(jsonlite)
+  library(FLasher)
+})
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/loadStocks.R"))
+source(file.path(root, "R/om.R"))
+theme_set(theme_bluemarine_html())
+```
+
+```{r load-om}
+load_om(root)
+eqls_file = file.path(root, "data/interim/03.0_om/eqls.RData")
+if (!file.exists(eqls_file))
+  stop("Missing ", eqls_file, " — knit Rmd/02.0_condition_om.Rmd first.", call.=FALSE)
+load(eqls_file)
+tol = 0.05
+
+# ldply over stocks: stop with a clear message instead of dropping failures.
+map_stock = function(obj, fn, what = "stock") {
+  out = tryCatch(
+    ldply(obj, function(z) {
+      r = tryCatch(fn(z), error = function(e) {
+        stop(what, " failed: ", conditionMessage(e), call. = FALSE)
+      })
+      if (is.null(r)) return(NULL)
+      r = as.data.frame(r)
+      if (!NROW(r)) return(NULL)
+      r
+    }),
+    error = function(e) stop(conditionMessage(e), call. = FALSE)
+  )
+  if (is.null(out) || !NROW(out))
+    stop("No rows from ", what, " — check inputs.", call. = FALSE)
+  out
+}
+scen_rows = function(srr, scen, dat) {
+  if (is.null(dat) || !NROW(dat))
+    stop("Empty rows for SRR=", srr, " Scenario=", scen, call. = FALSE)
+  cbind(SRR = srr, Scenario = scen, dat)
+}
+```
+
+# Biological variation
+
+The historical backtest keeps these year-specific series rather than replacing them with means. Weight-at-age, \(M\) and maturity, together with recruitment residuals, are the observed productivity history.
+
+**Table `r Tab=Tab+1; Tab`**. Whether natural mortality, maturity and mass
+vary by age or year in each `FLStock`.
+
+```{r vary}
+vary = ldply(oms, checkVariation)
+if (!("sid" %in% names(vary)) && (".id" %in% names(vary)))
+  vary$sid = as.character(vary$.id)
+vary = transform(vary,
+  m.by.age   = ifelse(mAge,   "varies by age",  "constant by age"),
+  m.by.yr    = ifelse(mYr,    "varies by year", "constant by year"),
+  mat.by.yr  = ifelse(matYr,  "varies by year", "constant by year"),
+  mass.by.yr = ifelse(massYr, "varies by year", "constant by year"))
+vary = merge(vary, stocks[, c("sid","name")], by="sid")
+vary$name = factor(vary$name, levels=levels(stocks$name))
+vary = vary[order(vary$name), ]
+knitr::kable(
+  vary[, c("name","sid","m.by.age","m.by.yr","mat.by.yr","mass.by.yr")],
+  col.names = c("Stock","SID","M (age)","M (year)","Maturity","Mass"),
+  row.names = FALSE)
+save(vary, file=file.path(root, "data/interim/03.0_om", "vary.RData"))
+```
+
+# \(F_{\mathrm{MSY}}\): `fwd` vs `FLBRP`
+
+Gate from [`02.1_lterm_eq.Rmd`](02.1_lterm_eq.Rmd): 50-year deterministic
+`fwd` at FLBRP \(F_{\mathrm{MSY}}\) (`fwdWindow(stk, eq)`) vs
+`refpts(eq)["msy", ]`. Yield is landings.
+
+```{r lterm-eq, cache=FALSE}
+lterm_file = file.path(root, "data/results/03.3_lterm_eq.RData")
+if (!file.exists(lterm_file))
+  stop("Missing ", lterm_file, " — knit Rmd/02.1_lterm_eq.Rmd first.",
+       call. = FALSE)
+load(lterm_file)
+lterm = lterm_eq
+lterm_pass = lterm$pass
+save(lterm, lterm_pass,
+     file=file.path(root, "data/interim/03.0_om", "lterm.RData"))
+```
+
+**Table `r Tab=Tab+1; Tab`**. Long-term `fwd` / FLBRP MSY.
+
+```{r lterm-eq-table}
+cmp = lterm$compare
+cmp$flbrp = signif(cmp$flbrp, 4)
+cmp$longTerm = signif(cmp$longTerm, 4)
+cmp$ratio = round(cmp$ratio, 3)
+keep = intersect(c("name", "metric", "flbrp", "longTerm", "ratio", "pass"),
+                 names(cmp))
+knitr::kable(
+  cmp[, keep],
+  col.names = c("Stock", "Metric", "FLBRP MSY",
+                "Long-term mean", "Ratio", "Pass")[seq_along(keep)],
+  row.names = FALSE)
+```
+
+**Table `r Tab=Tab+1; Tab`**. Pass/fail (all four metrics within
+`r 100*tol`%).
+
+```{r lterm-eq-pass}
+knitr::kable(lterm_pass, row.names = FALSE)
+```
+
+```{r lterm-eq-plot, fig.height=6, fig.width=9}
+rd = subset(lterm$compare, is.finite(ratio))
+if (nrow(rd)) {
+  ggplot(rd, aes(name, ratio)) +
+    geom_hline(yintercept = 1, linetype = 2, colour = bm_col("ref_strong")) +
+    geom_hline(yintercept = c(1 - tol, 1 + tol), linetype = 3,
+               colour = bm_col("muted")) +
+    geom_point(size = 2.2) +
+    facet_wrap(~ metric, scales = "free_y", ncol = 2) +
+    labs(x = NULL, y = "fwd / FLBRP MSY") +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1))
+}
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Long-term `fwd` / FLBRP MSY. Dotted lines are
+\(\pm\)`r 100*tol`%. Full trajectories: [`02.1_lterm_eq.Rmd`](02.1_lterm_eq.Rmd).
+
+# Dynamic \(B_0\)
+
+Unfished SSB by year from observed recruitment and year-specific SPR0
+(`icesdata::spr0Yr`). No stock–recruitment fit.
+
+**Figure `r Fig=Fig+1; Fig`**. Historical SSB and dynamic \(B_0\)
+(\(R_t \times \mathrm{SPR}_{0,t}\)).
+
+```{r dynB0, fig.height=8, fig.width=10}
+dynB0 = FLQuants()
+for (id in sids)
+  dynB0[[id]] = rec(oms[[id]]) * spr0Yr(oms[[id]])
+
+b0_plot = rbind(
+  transform(as.data.frame(FLQuants(lapply(oms[sids], ssb)), drop=TRUE), series="SSB"),
+  transform(as.data.frame(dynB0, drop=TRUE), series="dynB0"))
+names(b0_plot)[names(b0_plot)=="qname"] = "sid"
+b0_plot = merge(b0_plot, stocks, by="sid")
+b0_plot$name = factor(b0_plot$name, levels=levels(stocks$name))
+b0_plot = subset(b0_plot, is.finite(data))
+
+ggplot(b0_plot, aes(year, data, colour=series)) +
+  geom_line(linewidth=0.75) +
+  scale_colour_manual(values=c(SSB=bm_col("advice"), dynB0=bm_col("catch"))) +
+  facets_stock_wrap(ncol=2) +
+  labs(x=NULL, y="Biomass", colour=NULL)
+```
+
+# Process error (production Operating Model)
+
+**Figure `r Fig=Fig+1; Fig`**. Process error on the production Operating Model,
+\((SSB_{t+1}-SSB_t+C_t-SP_t)/SSB_t\), from `processError`.
+
+```{r pe, fig.height=8, fig.width=10}
+pe = ldply(sids, function(id) {
+  rtn = tryCatch(processError(eqs[[id]]), error = function(e)
+    stop("processError(", id, "): ", conditionMessage(e), call. = FALSE))
+  q = if (is(rtn, "FLQuants") && "pe" %in% names(rtn)) rtn[["pe"]] else rtn
+  d = as.data.frame(q, drop = TRUE)
+  if (!("year" %in% names(d) && "data" %in% names(d)))
+    stop("processError(", id, ") did not return year/data columns.", call. = FALSE)
+  cbind(sid = id, d)
+}, .id = NULL)
+ggplot_stock_ts(pe, y="data", ylab=expression((SSB[t+1]-SSB[t]+C[t]-SP[t])/SSB[t]),
+                hline=0)
+save(pe, file=file.path(root, "data/interim/03.0_om", "pe.RData"))
+```
+
+# SPR\(_0\)
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific spawners per recruit in the
+absence of fishing, \(\mathrm{SPR}_{0,t}\).
+
+```{r spr0, fig.height=8, fig.width=10}
+spr0Par = llply(oms, function(x) {
+  res = spr0Yr(x)
+  FLPar(array(c(res), dim=c(1, dim(res)[2]),
+              dimnames=list(params="spr0", iter=seq(dim(res)[2]))))
+})
+spr0 = ldply(oms, function(x) {
+  d = as.data.frame(spr0Yr(x), drop=TRUE)
+  data.frame(year=d$year, spr0=d$data)
+}, .id="sid")
+ggplot_stock_ts(spr0, y="spr0", ylab=expression(SPR[0]))
+save(spr0, spr0Par, file=file.path(root, "data/interim/03.0_om", "spr0.RData"))
+```
+
+# Year-varying SRR and virgin biomass
+
+Beverton–Holt with a FishLife steepness prior and year-specific SPR0
+(`icesdata::ftmb`).
+
+```{r sr}
+# icesdata:::ftmb is not exported and aborts this R build (NA/NaN gradient,
+# then process exit 5). Skip year-varying SPR0 SRR; production
+# nonStationarity below uses eqs from 02.0.
+sr = NULL
+srPar = NULL
+sr_sids = character()
+save(sr, srPar, file=file.path(root, "data/interim/03.0_om", "sr.RData"))
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Year-varying virgin biomass implied by the
+dynamic-SPR0 Beverton–Holt fit.
+
+```{r virgin, fig.height=8, fig.width=10}
+if (!length(sr_sids)) {
+  virgin = data.frame(sid=character(), year=numeric(), v=numeric())
+  cat("Skipping virgin biomass: no year-varying ftmb fits.\n")
+} else {
+  virgin = mdply(sr_sids, function(id) {
+    cbind(sid=id, model.frame(srPar[[id]], drop=TRUE),
+          year=unlist(dimnames(spr0Yr(oms[[id]]))$year))
+  })[, -c(1, 6)]
+  virgin$year = as.numeric(virgin$year)
+  print(ggplot_stock_ts(virgin, y="v", ylab="Biomass"))
+}
+save(virgin, file=file.path(root, "data/interim/03.0_om", "virgin.RData"))
+```
+
+# Time-varying MSY (production SRR)
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific \(B_{\mathrm{MSY}}\) from
+`nonStationarity` on the production SRR.
+
+```{r rf-ssb, fig.height=8, fig.width=10}
+rf = mdply(sids, function(id) {
+  out = tryCatch(
+    cbind(sid = id, nonStationarity(oms[[id]], sr = eqs[[id]])),
+    error = function(e)
+      stop("nonStationarity(", id, "): ", conditionMessage(e), call. = FALSE))
+  out
+})
+rf = reshape2::dcast(rf, sid+year+refpt ~ quant, value.var="data")
+save(rf, file=file.path(root, "data/interim/03.0_om", "rf.RData"))
+ggplot_stock_ts(subset(rf, refpt=="msy"), y="ssb", ylab="SSB")
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific MSY yield on the production SRR.
+
+```{r rf-yield, fig.height=8, fig.width=10}
+ggplot_stock_ts(subset(rf, refpt=="msy"), y="yield", ylab="Yield")
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific \(F_{\mathrm{MSY}}\) on the
+production SRR.
+
+```{r rf-f, fig.height=8, fig.width=10}
+ggplot_stock_ts(subset(rf, refpt=="msy"), y="harvest", ylab="F")
+```
+
+# ABI (production Operating Model)
+
+**Figure `r Fig=Fig+1; Fig`**. Age-based indicator \(\mathrm{ABI}_{\mathrm{MSY}}\)
+on the production Operating Model (`eqs`), scaled to each stock's mean.
+
+```{r abi, fig.height=8, fig.width=10}
+abi = ldply(sids, function(id) {
+  rtn = tryCatch(icesdata::abi(oms[[id]], eqs[[id]]), error = function(e)
+    stop("abi(", id, "): ", conditionMessage(e), call. = FALSE))
+  cbind(sid = id, as.data.frame(rtn, drop = TRUE))
+}, .id = NULL)
+names(abi)[names(abi) == "data"] = "abi"
+save(abi, file=file.path(root, "data/interim/03.0_om", "abi.RData"))
+abi2 = ddply(abi, .(sid), transform, abi=abi/mean(abi))
+ggplot_stock_ts(abi2, y="abi", ylab="ABI / mean ABI")
+```
+
+# Equilibrium yield and recruitment (scenario Operating Models)
+
+**Figure `r Fig=Fig+1; Fig`**. Equilibrium yield against SSB for the six SRR
+branches (colour = SRR, linetype = prior). Grey path and points are the
+observed assessment trajectory.
+
+```{r pf-yield, fig.height=11, fig.width=10}
+pf = rbind(
+  cbind(id=1, ldply(bh1, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))),
+  cbind(id=2, ldply(bh2, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))),
+  cbind(id=3, ldply(bh3, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))),
+  cbind(id=4, ldply(rk1, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))),
+  cbind(id=5, ldply(rk2, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))),
+  cbind(id=6, ldply(rk3, function(x) model.frame(FLQuants(x, SSB=ssb, Yield=catch, Recruits=rec), drop=TRUE))))
+names(pf)[2] = "sid"
+pf = merge(pf, stocks[, c("sid","name")])
+scen = expand.grid(Scenario=c("h & R0 Estimated","Steepness Prior","R0 Fixed"),
+                   SRR=c("Beverton & Holt","Ricker"))
+pf = cbind(scen[pf$id, ], pf)
+obs = ldply(bh1, function(x)
+  model.frame(FLQuants(x, SSB=ssb.obs, Yield=catch.obs, Recruits=rec.obs), drop=TRUE),
+  .id="sid")
+obs = merge(obs, stocks[, c("sid","name")])
+save(pf, obs, file=file.path(root, "data/interim/03.0_om", "pf.RData"))
+
+ggplot(pf, aes(SSB, Yield, colour=SRR, linetype=Scenario)) +
+  facet_wrap(~ name, scales="free", ncol=2) +
+  geom_path(data=obs, aes(SSB, Yield), inherit.aes=FALSE,
+            colour=bm_col("muted"), linewidth=0.35, alpha=0.75, na.rm=TRUE) +
+  geom_point(data=obs, aes(SSB, Yield), inherit.aes=FALSE,
+             colour=bm_col("ink"), size=1.1, alpha=0.45, stroke=0, na.rm=TRUE) +
+  geom_line(linewidth=0.75, na.rm=TRUE) +
+  scale_colour_manual(values=c("Beverton & Holt"=bm_col("advice"),
+                               "Ricker"=bm_col("catch"))) +
+  scale_linetype_manual(values=c("h & R0 Estimated"="solid",
+                                 "Steepness Prior"="dashed",
+                                 "R0 Fixed"="longdash")) +
+  labs(x="SSB (t)", y="Yield (t)", colour=NULL, linetype=NULL) +
+  theme_bluemarine_html()
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Equilibrium recruitment against SSB for the
+same six SRR scenarios, with the observed stock–recruit pairs in grey.
+
+```{r pf-rec, fig.height=11, fig.width=10}
+ggplot(pf, aes(SSB, Recruits, colour=SRR, linetype=Scenario)) +
+  facet_wrap(~ name, scales="free", ncol=2) +
+  geom_path(data=obs, aes(SSB, Recruits), inherit.aes=FALSE,
+            colour=bm_col("muted"), linewidth=0.35, alpha=0.75, na.rm=TRUE) +
+  geom_point(data=obs, aes(SSB, Recruits), inherit.aes=FALSE,
+             colour=bm_col("ink"), size=1.1, alpha=0.45, stroke=0, na.rm=TRUE) +
+  geom_line(linewidth=0.75, na.rm=TRUE) +
+  scale_colour_manual(values=c("Beverton & Holt"=bm_col("advice"),
+                               "Ricker"=bm_col("catch"))) +
+  scale_linetype_manual(values=c("h & R0 Estimated"="solid",
+                                 "Steepness Prior"="dashed",
+                                 "R0 Fixed"="longdash")) +
+  labs(x="SSB (t)", y="Recruits", colour=NULL, linetype=NULL) +
+  theme_bluemarine_html()
+```
+
+# Scenario diagnostics
+
+Life-history covariates, time series, process error and ABI on the six SRR
+branches (not the production Operating Model).
+
+```{r covars}
+covars = rbind.fill(
+  scen_rows("Beverton & Holt", 1, map_stock(bh1, function(x) covarFn(x))),
+  scen_rows("Beverton & Holt", 2, map_stock(bh2, function(x) covarFn(x))),
+  scen_rows("Beverton & Holt", 3, map_stock(bh3, function(x) covarFn(x))),
+  scen_rows("Ricker", 1, map_stock(rk1, function(x) covarFn(x, model="ricker"))),
+  scen_rows("Ricker", 2, map_stock(rk2, function(x) covarFn(x, model="ricker"))),
+  scen_rows("Ricker", 3, map_stock(rk3, function(x) covarFn(x, model="ricker"))))
+if (is.null(covars) || !NROW(covars))
+  covars = data.frame(SRR=character(), Scenario=integer(), stringsAsFactors=FALSE)
+if (NROW(covars) && "Scenario" %in% names(covars))
+  covars$Scenario = factor(covars$Scenario, levels=1:3,
+    labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+if (".id" %in% names(covars)) names(covars)[names(covars) == ".id"] = "sid"
+save(covars, file=file.path(root, "data/interim/03.0_om", "covars.RData"))
+```
+
+```{r ts-scen}
+tsFn = function(x) {
+  model.frame(FLQuants(f=fbar(x), hrate=catch(x)%/%ebiomass(x),
+                       eb=ebiomass(x), ssb=ssb(x), rec=rec(x), catch=catch(x)),
+              drop=TRUE)
+}
+ts = rbind.fill(
+  scen_rows("Beverton & Holt", 1, map_stock(bh1, tsFn)),
+  scen_rows("Beverton & Holt", 2, map_stock(bh2, tsFn)),
+  scen_rows("Beverton & Holt", 3, map_stock(bh3, tsFn)),
+  scen_rows("Ricker", 1, map_stock(rk1, tsFn)),
+  scen_rows("Ricker", 2, map_stock(rk2, tsFn)),
+  scen_rows("Ricker", 3, map_stock(rk3, tsFn)))
+if (is.null(ts) || !NROW(ts))
+  ts = data.frame(SRR=character(), Scenario=integer(), stringsAsFactors=FALSE)
+if (NROW(ts) && "Scenario" %in% names(ts))
+  ts$Scenario = factor(ts$Scenario, levels=1:3,
+    labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+save(ts, file=file.path(root, "data/interim/03.0_om", "ts.RData"))
+```
+
+```{r pe-scen}
+peScen = rbind.fill(
+  scen_rows("Beverton & Holt", 1, map_stock(bh1, function(x)
+    model.frame(processError(x), drop=TRUE))),
+  scen_rows("Beverton & Holt", 2, map_stock(bh2, function(x)
+    model.frame(processError(x), drop=TRUE))),
+  scen_rows("Beverton & Holt", 3, map_stock(bh3, function(x)
+    model.frame(processError(x), drop=TRUE))),
+  scen_rows("Ricker", 1, map_stock(rk1, function(x)
+    model.frame(processError(x), drop=TRUE))),
+  scen_rows("Ricker", 2, map_stock(rk2, function(x)
+    model.frame(processError(x), drop=TRUE))),
+  scen_rows("Ricker", 3, map_stock(rk3, function(x)
+    model.frame(processError(x), drop=TRUE))))
+if (is.null(peScen) || !NROW(peScen))
+  peScen = data.frame(SRR=character(), Scenario=integer(), stringsAsFactors=FALSE)
+if (NROW(peScen) && "Scenario" %in% names(peScen))
+  peScen$Scenario = factor(peScen$Scenario, levels=1:3,
+    labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+save(peScen, file=file.path(root, "data/interim/03.0_om", "peScen.RData"))
+```
+
+```{r abi-scen}
+abiFn = function(id, eq) {
+  rtn = as.data.frame(abi(oms[[id]], eq[[id]]), drop=TRUE)
+  if ("try-error" %in% is(rtn)) return(NULL)
+  rtn
+}
+abiScen = rbind(
+  cbind(SRR="Beverton & Holt", rbind(
+    cbind(Scenario=1, mdply(data.frame(id=sids), abiFn, bh1)),
+    cbind(Scenario=2, mdply(data.frame(id=sids), abiFn, bh2)),
+    cbind(Scenario=3, mdply(data.frame(id=sids), abiFn, bh3)))),
+  cbind(SRR="Ricker", rbind(
+    cbind(Scenario=1, mdply(data.frame(id=sids), abiFn, rk1)),
+    cbind(Scenario=2, mdply(data.frame(id=sids), abiFn, rk2)),
+    cbind(Scenario=3, mdply(data.frame(id=sids), abiFn, rk3)))))
+abiScen$Scenario = factor(abiScen$Scenario, levels=1:3,
+  labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+names(abiScen)[5] = "abi"
+save(abiScen, file=file.path(root, "data/interim/03.0_om", "abiScen.RData"))
+abiTerminal = ddply(abiScen, .(id, SRR, Scenario), with,
+                    data.frame(abi=mean(abi[year %in% (max(year)-0:2)])))
+save(abiTerminal, file=file.path(root, "data/interim/03.0_om", "abiTerminal.RData"))
+```
+
+# Time-varying MSY (scenario Operating Models)
+
+```{r nonstat}
+nsFn = function(id, eq, matSel=FALSE) {
+  out = cbind(sid=id, nonStationarity(oms[[id]], sr=eq[[id]], matSel=matSel))
+  if ("try-error" %in% is(out)) return(NULL)
+  out
+}
+rf2 = rbind(
+  cbind(SRR="Beverton & Holt", rbind(
+    cbind(Scenario=1, mdply(sids, nsFn, bh1)),
+    cbind(Scenario=2, mdply(sids, nsFn, bh2)),
+    cbind(Scenario=3, mdply(sids, nsFn, bh3)))),
+  cbind(SRR="Ricker", rbind(
+    cbind(Scenario=1, mdply(sids, nsFn, rk1)),
+    cbind(Scenario=2, mdply(sids, nsFn, rk2)),
+    cbind(Scenario=3, mdply(sids, nsFn, rk3)))))
+rf2$Scenario = factor(rf2$Scenario, levels=1:3,
+  labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+save(rf2, file=file.path(root, "data/interim/03.0_om", "rf2.RData"))
+msy = reshape2::dcast(subset(rf2, refpt=="msy"), sid+year+SRR+Scenario ~ quant, value.var="data")
+names(msy)[5:9] = paste("msy", names(msy)[5:9], sep=".")
+names(msy) = gsub("\\.", "_", names(msy))
+save(msy, file=file.path(root, "data/interim/03.0_om", "msy.RData"))
+
+rfMatSel = rbind.fill(
+  cbind(SRR="Beverton & Holt", rbind.fill(
+    cbind(Scenario=1, mdply(sids, nsFn, bh1, TRUE)),
+    cbind(Scenario=2, mdply(sids, nsFn, bh2, TRUE)),
+    cbind(Scenario=3, mdply(sids, nsFn, bh3, TRUE)))),
+  cbind(SRR="Ricker", rbind.fill(
+    cbind(Scenario=1, mdply(sids, nsFn, rk1, TRUE)),
+    cbind(Scenario=2, mdply(sids, nsFn, rk2, TRUE)),
+    cbind(Scenario=3, mdply(sids, nsFn, rk3, TRUE)))))
+rfMatSel$Scenario = factor(rfMatSel$Scenario, levels=1:3,
+  labels=c("h & R0 Estimated","Steepness Prior","R0 Fixed"))
+save(rfMatSel, file=file.path(root, "data/interim/03.0_om", "rfMatSel.RData"))
+msyMatSel = reshape2::dcast(subset(rfMatSel, refpt=="msy"),
+                 sid+year+SRR+Scenario ~ quant, value.var="data")
+names(msyMatSel)[5:9] = paste("msy", names(msyMatSel)[5:9], sep=".")
+names(msyMatSel) = gsub("\\.", "_", names(msyMatSel))
+save(msyMatSel, file=file.path(root, "data/interim/03.0_om", "msyMatSel.RData"))
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific MSY yield by SRR and prior.
+
+```{r plot-msy-scenarios, fig.height=8, fig.width=10}
+msy_plot = merge(msy, msyMatSel, by=c("sid","year","SRR","Scenario"))
+names(msy_plot) = gsub("msy_", "", names(msy_plot))
+ggplot_stock_ts_cmp(msy_plot, y="yield.x", colour="Scenario", linetype="SRR",
+                    ylab="Yield")
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Year-specific MSY when selectivity is set equal
+to maturity.
+
+```{r plot-msy-matsel, fig.height=8, fig.width=10}
+ggplot_stock_ts_cmp(msy_plot, y="yield.y", colour="Scenario", linetype="SRR",
+                    ylab="Yield")
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Production-like branch (Beverton–Holt, \(R_0\)
+fixed): MSY versus MSY with selectivity equal to maturity.
+
+```{r plot-msy-compare, fig.height=8, fig.width=10}
+msy_sel = subset(msy_plot, SRR=="Beverton & Holt" & Scenario=="R0 Fixed")
+msy_sel = reshape2::melt(msy_sel, id.vars=c("sid","year"),
+                         measure.vars=c("yield.x","yield.y"),
+                         variable.name="series", value.name="yield")
+msy_sel$series = factor(msy_sel$series, levels=c("yield.x","yield.y"),
+                        labels=c("MSY","MSY (Sel = Mat)"))
+ggplot_stock_ts_cmp(msy_sel, y="yield", colour="series", ylab="Yield",
+                    colour_values=c("MSY"=bm_col("catch"),
+                                    "MSY (Sel = Mat)"=bm_col("advice")))
+```
+
+# Realised status from assessments
+
+Summaries from SAG and the conditioned `FLStock`s **before** any backtest.
+
+```{r advice-setup}
+scr_file = file.path(root, "data/results/01_screening.RData")
+if (file.exists(scr_file)) {
+  load(scr_file)
+  advice = screening$advice
+} else {
+  sagAdvice = function(sid) {
+    sid = unique(as.character(sid))
+    parts = lapply(sid, function(s) {
+      url = paste0("https://asd.ices.dk/API/getAdviceViewRecord?StockCode=",
+                   URLencode(s, reserved=TRUE))
+      d = tryCatch(jsonlite::fromJSON(url), error=function(e) NULL)
+      if (is.null(d) || !NROW(d)) return(NULL)
+      d = as.data.frame(d, stringsAsFactors=FALSE)
+      data.frame(sid=s,
+                 assYear=as.integer(d$assessmentYear),
+                 adviceYear=as.integer(substr(as.character(d$adviceApplicableFrom),1,4)),
+                 advice=suppressWarnings(as.numeric(d$adviceValue)),
+                 stringsAsFactors=FALSE)
+    })
+    out = do.call(rbind, Filter(Negate(is.null), parts))
+    if (is.null(out))
+      return(data.frame(sid=character(), assYear=integer(),
+                        adviceYear=integer(), advice=double(),
+                        stringsAsFactors=FALSE))
+    out[order(out$sid, out$adviceYear, out$assYear), ]
+  }
+  advice = sagAdvice(sids)
+}
+
+ts_sag = as.data.table(sag$ts)
+rp = as.data.table(sag$rfpts)
+rp_current = rp[order(sid, -assYear), .SD[1], by=sid]
+dt = merge(ts_sag, rp_current[, .(sid, Blim, Btrigger=MSYBtrigger,
+                                  Fmsy=FMSY, Fpa)],
+           by="sid", all.x=TRUE)
+dt = merge(dt, stocks, by="sid", all.x=TRUE)
+num_cols = intersect(c("rec","ssb","catch","landings","discards","fbar","f"), names(dt))
+if (length(num_cols))
+  dt[, (num_cols) := lapply(.SD, as.numeric), .SDcols=num_cols]
+if (!"fbar" %in% names(dt) && "f" %in% names(dt))
+  dt$fbar = dt$f
+```
+
+**Figure `r Fig=Fig+1; Fig`**. ICES advised catch (Advice and Scenarios
+Database) and reported catch from the latest SAG assessment.
+
+```{r asd-advice, fig.height=10, fig.width=10}
+if (!"name" %in% names(advice))
+  advice = merge(advice, stocks, by="sid")
+advice = subset(advice, is.finite(adviceYear) & is.finite(advice))
+latest_ass = aggregate(assYear ~ sid, data=sag$ts, FUN=max)
+reported = merge(sag$ts, latest_ass, by=c("sid","assYear"))
+reported = merge(reported, stocks, by="sid")
+reported = subset(reported, is.finite(year) & is.finite(catch))
+advice_plot = rbind(
+  data.frame(sid=advice$sid, name=advice$name, year=advice$adviceYear,
+             series="ICES advice", data=advice$advice, stringsAsFactors=FALSE),
+  data.frame(sid=reported$sid, name=reported$name, year=reported$year,
+             series="Reported catch", data=reported$catch, stringsAsFactors=FALSE))
+advice_plot$series = factor(advice_plot$series,
+                            levels=c("Reported catch","ICES advice"))
+advice_plot = subset(advice_plot, year >= 2010L & is.finite(data))
+advice_plot$name = factor(advice_plot$name, levels=levels(stocks$name))
+ggplot(advice_plot, aes(year, data, colour=series, linetype=series)) +
+  geom_line(linewidth=0.85) +
+  geom_point(size=1.2, alpha=0.9) +
+  scale_catch_advice_colour() +
+  scale_catch_advice_linetype() +
+  facets_stock_row() +
+  labs(x=NULL, y="Catch (t)", colour=NULL, linetype=NULL)
+```
+
+**Table `r Tab=Tab+1; Tab`**. Terminal-year SSB, \(F\) and catch (also the
+mean of the last three years).
+
+```{r advice-current}
+Current = dt[order(sid, year),
+  .(termYear = last(year),
+    ssbT     = last(ssb),
+    ssbL3    = mean(tail(ssb, 3), na.rm=TRUE),
+    fbarT    = last(fbar),
+    fbarL3   = mean(tail(fbar, 3), na.rm=TRUE),
+    catchT   = last(catch),
+    catchL3  = mean(tail(catch, 3), na.rm=TRUE),
+    recT     = last(rec),
+    recL3    = mean(tail(rec, 3), na.rm=TRUE),
+    ssb_btrigT  = last(ssb) / first(Btrigger),
+    ssb_btrigL3 = mean(tail(ssb, 3)) / first(Btrigger),
+    ssb_blimT   = last(ssb) / first(Blim),
+    f_fmsyT     = last(fbar) / first(Fmsy),
+    f_fmsyL3    = mean(tail(fbar, 3)) / first(Fmsy)),
+  by=.(sid, name)]
+knitr::kable(Current[, c(1:3, seq(5, 9, 2))], digits=2,
+             col.names=c("SID","Stock","Year","SSB","F","Catch"),
+             row.names=FALSE)
+```
+
+**Table `r Tab=Tab+1; Tab`**. Terminal-year status relative to
+\(MSYB_{\mathrm{trigger}}\), \(B_{\lim}\) and \(F_{\mathrm{MSY}}\).
+
+```{r advice-current-rel}
+knitr::kable(Current[, c(1:3, 12, 14, 15)], digits=2,
+             col.names=c("SID","Stock","Year","SSB/Btrig","SSB/Blim","F/FMSY"),
+             row.names=FALSE)
+```
+
+**Table `r Tab=Tab+1; Tab`**. Historical since 2010: share of years below
+\(B_{\lim}\) and \(B_{\mathrm{trigger}}\), share with \(F>F_{\mathrm{MSY}}\),
+mean catch and AAV.
+
+```{r advice-path}
+histICES = subset(dt, year >= 2010)[order(sid, year),
+  .(n_years       = .N,
+    year_from     = first(year),
+    year_to       = last(year),
+    p_below_blim  = mean(ssb < Blim, na.rm=TRUE),
+    p_below_btrig = mean(ssb < Btrigger, na.rm=TRUE),
+    p_f_over_fmsy = mean(fbar > Fmsy, na.rm=TRUE),
+    mean_catch    = mean(catch, na.rm=TRUE),
+    med_catch     = median(catch, na.rm=TRUE),
+    aav           = mean(abs(diff(catch)) / head(catch, -1), na.rm=TRUE),
+    max_drawdown  = min(catch, na.rm=TRUE) / max(catch, na.rm=TRUE)),
+  by=.(sid, name)]
+knitr::kable(histICES, digits=3, row.names=FALSE)
+```
+
+**Table `r Tab=Tab+1; Tab`**. Realised summary (Current joined to Historical) for
+comparison with the HCR counterfactual in `05.1_metrics.Rmd`.
+
+```{r advice-realised}
+realised = merge(Current, histICES, by=c("sid","name"))
+knitr::kable(realised, digits=3, row.names=FALSE)
+```
+
+**Figure `r Fig=Fig+1; Fig`**. SAG SSB with \(B_{\lim}\) (dashed) and
+\(MSYB_{\mathrm{trigger}}\) (dotted).
+
+```{r advice-fig-ssb, fig.width=10, fig.height=6}
+ggplot(dt, aes(year, ssb)) +
+  geom_line(colour=bm_col("advice"), linewidth=0.7) +
+  geom_hline(aes(yintercept=Blim), linetype="dashed", colour=bm_col("catch")) +
+  geom_hline(aes(yintercept=Btrigger), linetype="dotted", colour=bm_col("trigger")) +
+  facet_wrap(~ name, scales="free_y") +
+  labs(x=NULL, y="SSB (t)")
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Mean catch in the last ten years versus
+production-Operating Model MSY (dashed).
+
+```{r advice-fig-catch, fig.width=10, fig.height=6}
+msy_rf = ldply(eqs, function(x)
+  model.frame(FLBRP::refpts(x)["msy","yield"], drop=TRUE), .id="sid")
+ggplot(merge(ddply(dt, .(sid), with,
+                   data.frame(cumCatch=cumsum(tail(catch, 10))/seq(10),
+                              year=tail(year, 10))),
+             stocks, by="sid"),
+       aes(year, cumCatch)) +
+  geom_line(colour=bm_col("advice"), linewidth=0.7) +
+  geom_hline(data=merge(msy_rf, stocks, by="sid"),
+             aes(yintercept=msy), colour=bm_col("catch"), linetype=2) +
+  facet_wrap(~ name, scales="free_y", ncol=2) +
+  labs(x=NULL, y="Mean catch (t)") +
+  scale_y_continuous(limits=c(0, NA))
+```
+
+**Figure `r Fig=Fig+1; Fig`**. Kobe-style path of \(SSB/MSYB_{\mathrm{trigger}}\)
+against \(F/F_{\mathrm{MSY}}\); the terminal year is the large point.
+
+```{r advice-fig-kobe, fig.width=10, fig.height=6}
+ggplot(dt, aes(ssb/Btrigger, fbar/Fmsy, colour=year)) +
+  geom_path(alpha=0.7) +
+  geom_point(data=dt[, .SD[.N], by=sid], size=2) +
+  geom_hline(yintercept=1, linetype="dashed") +
+  geom_vline(xintercept=1, linetype="dashed") +
+  scale_colour_viridis_c() +
+  facet_wrap(~ name, scales="free") +
+  labs(x="SSB / MSY Btrigger", y="F / FMSY")
+```
+
+```{r save}
+to_save = c("sag","oms","eqs","rsdl","rods","devs","stocks","sids",
+            "dynB0","Current","histICES","realised","dt","rp_current",
+            "lterm","lterm_pass")
+to_save = intersect(to_save, ls())
+save(list=to_save, file=file.path(root, "data/results/03.0_om.RData"))
+```
+
+`data/results/03.0_om.RData` is updated with `dynB0`, the realised-status
+tables, and the `fwd` vs `FLBRP` check (`lterm`). Scenario diagnostics remain
+under `data/interim/03.0_om/`.

@@ -1,0 +1,140 @@
+---
+title: "Supplementary methods notebooks"
+subtitle: "Index of the existing analysis chain — not a new analysis"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+This supplement **is** the existing methods notebooks. Notebooks stay in
+`Rmd/` so `root=` paths keep working; this file only lists and links them.
+Figures for the contract report are knitted in
+[`06.0_report.Rmd`](06.0_report.Rmd) — do not duplicate them here.
+
+Knit order is in [`README.md`](README.md) and in the section below.
+
+# Notebooks
+
+## [`01_screening.Rmd`](01_screening.Rmd) — stock selection / SAG
+
+Week 1 screening of Category 1 candidates: SAG status, advice vs catch,
+and local WGCSE `FLStock` vs SAG. Confirms the case-study list.
+
+Writes `data/results/01_screening.RData` (`screening`: stocks, inventory,
+SAG extracts, cleaned `oms`).
+
+## [`02.0_condition_om.Rmd`](02.0_condition_om.Rmd) — Operating Model / six SRR scenarios
+
+Builds the Operating Models used by the open- and closed-loop runs: load
+and clean WGCSE stocks, fit six SRR scenarios (BH / Ricker × unconstrained,
+FishLife steepness, \(R_0\) fixed), add ICES benchmarks, and simulate
+recruitment deviations (the observed productivity history used in the
+historical backtest).
+
+Writes `data/om/oms.RData`, `data/om/sag.RData`, `data/om/eqls.RData`,
+and `data/om/recDevs.RData`.
+
+## [`02.1_lterm_eq.Rmd`](02.1_lterm_eq.Rmd) — long-term \(F_{\mathrm{MSY}}\) gate
+
+**Required** before any `04.*` backtest. 50-year deterministic `fwd` at
+FLBRP \(F_{\mathrm{MSY}}\) versus `refpts(eq)["msy",]` via `ltermEq` /
+`ltermPass`. Knit after `02.0`. `require_om_gate()` stops if any stock
+fails. Full trajectories live here; `02.2` keeps compact diagnostics.
+
+Writes `data/results/03.3_lterm_eq.RData` (`lterm_eq`).
+
+## [`02.2_dynamics.Rmd`](02.2_dynamics.Rmd) — dynamics / realised status
+
+**Required** diagnostics: historical dynamics, SPR0, process error,
+realised status, and the compact `fwd` vs FLBRP check. Knit after `02.0`.
+
+Writes diagnostics under `data/interim/03.0_om/` and
+`data/results/03.0_om.RData` (`oms`, `eqs`, realised-status tables,
+`lterm`).
+
+## [`04.1_openLoop.Rmd`](04.1_openLoop.Rmd) / [`04.2_closedLoop.Rmd`](04.2_closedLoop.Rmd) — generic backtest
+
+Same Operating Models; two harvest policies. `04.1` is open-loop `fwd` at
+ICES \(F_{\mathrm{target}}\). `04.2` is closed-loop `hcrICES`. Both **stop**
+if `02.1` / `02.2` have not passed (`require_om_gate()` in `R/om.R`).
+Historical runs keep year-specific \(M\), mass and maturity and replay
+recruitment residuals (observed productivity).
+
+Writes `data/results/03.1_openLoop.RData`, `03.2_closedLoop.RData`.
+
+## [`04.3_rebuild.Rmd`](04.3_rebuild.Rmd) — 20-year Future
+
+From historical and closed-loop terminal states, `fwdWindow` 20 years with
+**mean** recruitment. That switches off the observed residual history.
+
+Writes `data/results/04.3_rebuild.RData`.
+
+## [`05.0_digest.Rmd`](05.0_digest.Rmd) — all-stock digest
+
+Terminal status for every gated stock. Use this to choose case studies.
+
+## [`06.1_TwoStocks.Rmd`](06.1_TwoStocks.Rmd) — case studies (funders)
+
+Irish Sea whiting and Celtic Sea cod. Funder take-home first.
+
+## [`06.2_generic.Rmd`](06.2_generic.Rmd) — generic OM, scn2
+
+Same question and figure set as `06.1`, for the remaining stocks on a generic **scn2** OM. Celtic Sea cod and Irish Sea whiting are in `06.1`.
+
+## [`06.0_report.Rmd`](06.0_report.Rmd) — contract report
+
+Loads `data/om` and `data/results` only. Does not re-run simulations.
+
+## Optional extras
+
+- [`04.4_closedLoop_sam.Rmd`](04.4_closedLoop_sam.Rmd) — SAM observation error
+- [`07_srr_internal_external.Rmd`](07_srr_internal_external.Rmd) — methods note
+
+# Knit order
+
+```
+01_screening.Rmd
+02.0_condition_om.Rmd
+        ├── 02.1_lterm_eq.Rmd          (required gate)
+        └── 02.2_dynamics.Rmd          (required diagnostics)
+04.1_openLoop.Rmd          }  generic FLStock backtest
+04.2_closedLoop.Rmd        }
+        └── 04.3_rebuild.Rmd
+05.0_digest.Rmd                        (all stocks)
+06.1_TwoStocks.Rmd                  (two case studies — funder summary)
+06.2_generic.Rmd                            (generic OM — scn2)
+06.0_report.Rmd
+
+Optional: 04.4_closedLoop_sam.Rmd, 07_srr_internal_external.Rmd
+```
+
+`04.1` and `04.2` share the OM and differ only in harvest policy.
+`02.1` / `02.2` are a hard stop. Knit `00_supplement.Rmd` anytime; it is
+an index.
+
+## Notes
+
+Generic FLR helpers:
+
+- **FLBacktest** — `hcrICES`, `hcrParams`, `cleanStock`, `openloop_start`,
+  `project_hcr`, `years_to`, `ltermEq`, `ltermPass`, `backtest` (`tryIt = FALSE`)
+- **FLfse** / **stockassessment** — `FLR_SAM`, `SAM2FLStock` (`04.4` only)
+- **ggplotFL** — `plot`, `geom_flpar_lab`
+- **icesdata** — `eql`, `addBenchmark`, `getSAG`, `b0dyn`, `processError`
+
+Application-only: `R/plot_theme.R`, `data/reference/stocks.csv`,
+`R/loadStocks.R`, `R/om.R` (`load_om`, `require_om_gate`), `R/advice_sheets.R`.
+See [`docs/FLR_methods.md`](../docs/FLR_methods.md).
+
+Code: [github.com/laurieKell/blueMarine](https://github.com/laurieKell/blueMarine);
+engine: [github.com/laurieKell/FLBacktest](https://github.com/laurieKell/FLBacktest).
+Pipeline: `Rscript scripts/run_pipeline.R`.

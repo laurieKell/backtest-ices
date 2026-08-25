@@ -1,0 +1,189 @@
+---
+title: "Long-term fwd vs FLBRP"
+subtitle: "Operating Model gate — deterministic Fmsy projection should reach refpts(eq)['msy',]"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+root <- "C:/active/blueMarine"
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "02.1_lterm_eq"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "02.1_lterm_eq/"),
+  fig.path  = file.path(root, "tex/figs", "02.1_lterm_eq-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       = "png")
+Fig=0
+Tab=0
+```
+
+```{r libs, echo=FALSE}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLasher)
+  library(FLBacktest)
+})
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/loadStocks.R"))
+source(file.path(root, "R/om.R"))
+theme_set(theme_bluemarine_html())
+load_om(root)
+nYears   = 50L
+avgYears = 10L
+tol      = 0.05
+```
+
+# Purpose
+
+A 50-year deterministic `FLasher::fwd` of each conditioned `FLStock` at
+FLBRP \(F_{\mathrm{MSY}}\) should finish at `refpts(eq)["msy", ]`
+(SSB, yield, recruitment, \(F\)).
+
+The projection uses `fwdWindow(stk, eq)` so `fwd` sees the same mean \(M\),
+weights, maturity and selectivity as `FLBRP`. Yield is **landings** (FLBRP
+`yield` is not catch-with-discards). A stock passes when the mean of the last
+10 years is within `r 100*tol`% of the FLBRP value.
+
+# One stock
+
+Irish Sea cod: extend the stock, project at \(F_{\mathrm{MSY}}\), compare
+the terminal year with `refpts`.
+
+```{r one-stock}
+sid = "cod.27.7a"
+stk = oms[[sid]]
+eq  = eqs[[sid]]
+rp  = refpts(eq)
+msy = c(harvest = c(rp["msy", "harvest"]),
+        ssb     = c(rp["msy", "ssb"]),
+        yield   = c(rp["msy", "yield"]),
+        rec     = c(rp["msy", "rec"]))
+
+endYr = dims(stk)$maxyear + nYears
+yrs   = (dims(stk)$maxyear + 1):endYr
+stkW  = fwdWindow(stk, eq, end = endYr)
+fmsy  = FLQuant(msy[["harvest"]], dimnames = list(year = ac(yrs)))
+omFmsy = FLasher::fwd(stkW, fbar = fmsy, sr = eq)
+
+term = window(omFmsy, start = endYr - avgYears + 1)
+data.frame(
+  metric = c("F", "SSB", "yield", "rec"),
+  FLBRP  = unname(msy[c("harvest", "ssb", "yield", "rec")]),
+  fwd    = c(mean(c(fbar(term))), mean(c(ssb(term))),
+             mean(c(landings(term))), mean(c(rec(term)))),
+  row.names = NULL)
+```
+
+```{r one-stock-plot, fig.height=7, fig.width=9, echo=FALSE}
+x0 = dims(stk)$maxyear
+plot(FLStocks("fwd" = omFmsy),
+     metrics = list(Rec = rec, SSB = ssb, Catch = landings, F = fbar)) +
+  geom_flpar(data = FLPars(
+    Rec   = FLPar("Rmsy" = msy[["rec"]]),
+    SSB   = FLPar("Bmsy" = msy[["ssb"]]),
+    Catch = FLPar("MSY"  = msy[["yield"]]),
+    F     = FLPar("Fmsy" = msy[["harvest"]])),
+    x = rep(x0, 4)) +
+  theme_bluemarine_html() +
+  labs(x = "Year", title = stock_name(sid, stocks))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Irish Sea cod: 50-year `fwd` at FLBRP
+\(F_{\mathrm{MSY}}\). Horizontal lines are `refpts(eq)["msy", ]`.
+
+# All stocks
+
+```{r all-stocks}
+omStks = if (is(oms, "FLStocks")) oms else FLStocks(oms)
+eqBrps = if (is(eqs, "FLBRPs")) eqs else FLBRPs(eqs)
+lt = ltermEq(omStks, eqBrps, nyears = nYears, avgYears = avgYears,
+             tol = tol, biology = "window",
+             labels = setNames(as.character(stocks$name),
+                               as.character(stocks$sid)))
+compare = lt$compare
+compare$name = factor(compare$name, levels = as.character(stocks$name))
+passTab = ltermPass(compare)
+fwds = FLStocks(lapply(lt$byStock, function(x) x$fwds[["window"]]))
+lterm_eq = list(compare = compare, pass = passTab, fwds = fwds,
+                nYears = nYears, avgYears = avgYears, tol = tol)
+save(lterm_eq, file = file.path(root, "data/results/03.3_lterm_eq.RData"))
+```
+
+**Table `r Tab = Tab + 1; Tab`**. Mean of the last `r avgYears` years vs
+`refpts(eq)["msy", ]`.
+
+```{r compare-table, echo=FALSE}
+cmp = compare
+cmp$flbrp = signif(cmp$flbrp, 4)
+cmp$longTerm = signif(cmp$longTerm, 4)
+cmp$ratio = round(cmp$ratio, 3)
+knitr::kable(
+  cmp[, c("name", "metric", "flbrp", "longTerm", "ratio", "pass")],
+  col.names = c("Stock", "Metric", "FLBRP MSY", "Long-term mean",
+                "fwd / FLBRP", "Pass"),
+  row.names = FALSE)
+```
+
+**Table `r Tab = Tab + 1; Tab`**. Pass if \(F\), SSB, yield and recruitment
+are all within `r 100*tol`%.
+
+```{r pass-table, echo=FALSE}
+knitr::kable(passTab, row.names = FALSE)
+```
+
+```{r ratio-plot, fig.height=6, fig.width=9, echo=FALSE}
+rd = subset(compare, is.finite(ratio))
+ggplot(rd, aes(name, ratio)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = bm_col("ref_strong")) +
+  geom_hline(yintercept = c(1 - tol, 1 + tol), linetype = 3,
+             colour = bm_col("muted")) +
+  geom_point(size = 2.2) +
+  facet_wrap(~ metric, scales = "free_y", ncol = 2) +
+  labs(x = NULL, y = "fwd / FLBRP MSY") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Long-term `fwd` / FLBRP MSY. Dotted lines
+are \(\pm\)`r 100*tol`%.
+
+```{r all-plots, fig.height=7, fig.width=9, echo=FALSE}
+for (id in names(fwds)) {
+  eq = eqs[[id]]
+  rp = refpts(eq)
+  print(
+    plot(FLStocks("fwd" = fwds[[id]]),
+         metrics = list(Rec = rec, SSB = ssb, Catch = landings, F = fbar)) +
+      geom_flpar(data = FLPars(
+        Rec   = FLPar("Rmsy" = c(rp["msy", "rec"])),
+        SSB   = FLPar("Bmsy" = c(rp["msy", "ssb"])),
+        Catch = FLPar("MSY"  = c(rp["msy", "yield"])),
+        F     = FLPar("Fmsy" = c(rp["msy", "harvest"]))),
+        x = rep(dims(oms[[id]])$maxyear, 4)) +
+      theme_bluemarine_html() +
+      labs(x = "Year", title = stock_name(id, stocks)))
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Each Operating Model: `fwd` at FLBRP \(F_{\mathrm{MSY}}\)
+with MSY reference lines. The last years should sit on the lines.
+
+Output: `data/results/03.3_lterm_eq.RData`.

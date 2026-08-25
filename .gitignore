@@ -1,0 +1,60 @@
+# R
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+*.Rproj.user/
+
+# Data (downloaded assessments and ICES extracts)
+data/raw/**
+!data/raw/.gitkeep
+data/interim/**
+!data/interim/.gitkeep
+data/results/**
+!data/results/.gitkeep
+
+# Knitr / R Markdown artefacts
+Rmd/cache/
+Rmd/*/cache/
+Rmd/*.html
+Rmd/*.pdf
+Rmd/*_knit.log
+
+# Generated outputs (keep folder placeholders)
+output/**
+!output/figures/.gitkeep
+!output/tables/.gitkeep
+!output/reports/.gitkeep
+
+# LaTeX build artefacts (keep sources and generated/ tables)
+tex/*.aux
+tex/*.log
+tex/*.out
+tex/*.toc
+tex/*.nav
+tex/*.snm
+tex/*.vrb
+tex/*.bbl
+tex/*.blg
+tex/*.synctex.gz
+tex/imperial/*.aux
+tex/imperial/*.log
+tex/imperial/*.out
+tex/imperial/*.toc
+tex/imperial/*.nav
+tex/imperial/*.snm
+tex/imperial/*.vrb
+tex/imperial/*.synctex.gz
+# Optional: uncomment to ignore compiled PDFs
+# tex/*.pdf
+
+# Archival / local-only (not part of the runnable pipeline)
+backUp/
+blueMarine.lnk
+Pictures/
+R/data/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

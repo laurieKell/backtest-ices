@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{ "path": "." },
+		{ "path": "data" },
+		{ "path": "R" },
+		{ "path": "Rmd" },
+		{ "path": "scripts" },
+		{ "path": "tex" },
+		{ "path": "output" }
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.Rhistory": true,
+			"**/*.aux": true,
+			"**/*.log": true
+		}
+	}
+}

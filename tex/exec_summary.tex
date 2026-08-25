@@ -1,0 +1,172 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Backtest of ICES Advice --- executive summary
+% Imperial College London visual identity (XeLaTeX + Imperial Sans)
+% Matches tex/paper.tex. Compile from tex/:
+%   xelatex exec_summary.tex
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%!TEX program = xelatex
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+
+\setmainfont{ImperialSansText}[
+  Path=imperial/Fonts/,
+  UprightFont=*-Regular.ttf,
+  BoldFont=*-Bold.ttf,
+  ItalicFont=*-Regular.ttf
+]
+\newfontface{\ImperialSansSemiBold}{ImperialSansText-Semibold.ttf}[Path=imperial/Fonts/]
+\newfontface{\ImperialSansMedium}{ImperialSansText-Medium.ttf}[Path=imperial/Fonts/]
+
+\usepackage[margin=2.1cm,top=2.2cm,bottom=2.0cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage[table,svgnames]{xcolor}
+\usepackage{colortbl}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{threeparttable}
+
+\definecolor{ICLBlue}{RGB}{0,0,205}
+\definecolor{ICLDarkBlue}{RGB}{0,0,128}
+
+\usepackage[
+  colorlinks=true,
+  linkcolor=ICLBlue,
+  citecolor=ICLBlue,
+  urlcolor=ICLBlue
+]{hyperref}
+
+\setlength{\parskip}{0.32em}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{2.5em}
+\setstretch{1.12}
+\setlist[itemize]{topsep=0.1em,itemsep=0.05em,leftmargin=1.1em}
+\setlist[enumerate]{topsep=0.1em,itemsep=0.05em,leftmargin=1.1em}
+
+\titleformat{\section}
+  {\color{ICLBlue}\ImperialSansSemiBold\large}{}{0em}{}
+\titleformat{\subsection}
+  {\color{ICLBlue}\ImperialSansMedium\normalsize}{}{0em}{}
+
+\captionsetup{labelfont={bf,color=ICLBlue},font=small,skip=4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+\fancyhead[L]{\color{ICLBlue}\small Imperial College London}
+\fancyhead[R]{\color{ICLBlue}\small Sea++}
+\fancyfoot[L]{\color{ICLBlue}\small imperial.ac.uk}
+\fancyfoot[C]{\color{ICLBlue}\small Executive summary --- Backtest of ICES Advice}
+\fancyfoot[R]{\color{ICLBlue}\small\thepage}
+\fancypagestyle{plain}{%
+  \fancyhf{}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0.4pt}
+  \fancyfoot[L]{\color{ICLBlue}\small imperial.ac.uk}
+  \fancyfoot[C]{\color{ICLBlue}\small Executive summary --- Backtest of ICES Advice}
+  \fancyfoot[R]{\color{ICLBlue}\small\thepage}
+}
+
+\newcommand{\Fmsy}{F_{\mathrm{MSY}}}
+\newcommand{\Ftar}{F_{\mathrm{target}}}
+\newcommand{\Blim}{B_{\lim}}
+\newcommand{\Btrig}{MSYB_{\mathrm{trigger}}}
+\newcommand{\Bmsy}{B_{\mathrm{MSY}}}
+
+\begin{document}
+
+\thispagestyle{plain}
+\IfFileExists{imperial/Images/ICL_Logo_Blue.pdf}{%
+\noindent\includegraphics[width=4.6cm]{imperial/Images/ICL_Logo_Blue.pdf}
+
+\vspace{1.1em}}{}
+{\color{ICLBlue}\ImperialSansSemiBold\LARGE
+Backtest of ICES Advice\par}
+\vspace{0.25em}
+{\color{ICLBlue}\ImperialSansMedium\large
+Executive summary --- six Northeast Atlantic stocks\par}
+
+\vspace{0.7em}
+{\ImperialSansMedium
+Laurence Kell\\[0.12em]
+Sea++\par}
+
+\vspace{0.35em}
+{\small 25 August 2026 \textperiodcentered\ Draft for ADGCS / funder \textperiodcentered\ Source: \texttt{Rmd/06.0\_report.Rmd}}
+
+\vspace{0.7em}
+{\color{ICLBlue}\hrule height 0.8pt}
+
+\vspace{0.7em}
+
+\section{What was done}
+
+We compared two counterfactual harvest policies with the latest ICES assessments for six Category~1 stocks --- Irish Sea cod and whiting, Celtic Sea cod, whiting and haddock, and Northeast Atlantic mackerel --- from 2005 to each stock's terminal assessment year. Northeast Atlantic mackerel is a special case: a recent benchmark involved a substantial change in the assessment, so the backtest conflates following the advice with robustness of that advice to the assessment change. It is retained for completeness and will be removed from the final report. The same Operating Model biology and stock--recruitment residuals are used in both simulations; only the harvest policy differs. The run is \textbf{deterministic}. This draft is \textbf{one SRR scenario}, not the full Operating Model set.
+
+Three trajectories: \textbf{Historical} (latest WGCSE assessment); $\boldsymbol{F}_{\mathrm{target}}$ (\textbf{open loop}: a simple projection at constant ICES SAG $\Fmsy$ from 2006, lag~1; no feedback; not the yearly advice-sheet $F$); and \textbf{Advice rule (AR)} (\textbf{closed loop}: an MSE with feedback control; \texttt{hcrICES} revises $F$ from SSB each year, $F=\Ftar$ when SSB$\ge\Btrig$, reduced toward $\Blim$; true Operating Model SSB, \texttt{err = NULL}; no implementation error; one-year lag). The constant-$F$ projection is the no-feedback benchmark that isolates fishing at $\Fmsy$ from following the HCR --- they can disagree (Irish Sea cod historical $F \approx 0.07\times F_{\mathrm{target}}$, so fishing at $F_{\mathrm{target}}$ lowers SSB; Celtic Sea stocks often sit below $\Btrig$, so the HCR fishes well below $F_{\mathrm{target}}$).
+
+Historical figures and Table~1 use \textbf{bh3} ($R_0$ prior from the hockey-stick); Future projections and Table~2 use the same scenario. HCR inputs come from \textbf{bh1}: unconstrained Beverton--Holt (\texttt{bevholtSV}); steepness is estimated, not fixed. Operating Model shading ($F_{\mathrm{MSY}}$, $\Bmsy$, $R_0$) is bh3. The 20-year Future window uses mean biology and mean recruitment --- longer than the ICES 1--2 year advice forecast, and not a stochastic forecast.
+
+ICES $\Ftar$, $\Blim$ and $MSYB_{\mathrm{trigger}}$ are \textbf{operational control points} of the HCR (they set $F$). Operating Model $\Bmsy$, $\Fmsy$ and years-to-rebuild are \textbf{performance metrics} (whether the CFP/MSY objective is met). Winker et al.\ (\emph{Fish and Fisheries} 2026) make that split: the trigger is an operationalised threshold, not a biomass target; $\Bmsy$ is not reported, and using the trigger as a surrogate over-classifies stocks as ``at MSY'' ($\Btrig$ $\sim$60\% of $\Bmsy$). The hockey-stick (segmented regression) is how ICES usually derives $\Blim$ (breakpoint) and then $\Btrig\approx B_{\mathrm{pa}}$; it is not Operating Model truth --- after the breakpoint recruitment is constant, so the production function is truncated. The HCR \emph{shape} remains that hockey-stick; the Operating Model SRR is bh3 (Beverton--Holt with an $R_0$ prior from the breakpoint, the same BH sensitivity Winker et al.\ used). An Operating Model and a \textbf{closed-loop} backtest are required because EqSim, as used in ICES benchmarks, is largely an open-loop projection at constant $F$ and does not simulate MSE feedback; EqSim $\Fmsy$ is not precautionary relative to a shortcut MSE on an Operating Model (Winker et al., ICES \emph{J.\ Mar.\ Sci.} 2025, fsaf204).
+
+\section{Historical}
+
+All six stocks are below $\Btrig$ in the terminal year. Realised $\bar F$ exceeds ICES $\Ftar$ except in Irish Sea cod. Once SSB is above the trigger, the AR sets $F=\Ftar$ (about a one-year lag). The contrast that matters is how far each stock sits below the trigger, and how much SSB the AR gains or loses relative to history ($\Delta$ in Table~1).
+
+\begin{table}[h]
+\centering
+\small
+\begin{threeparttable}
+\caption{Terminal-year SSB/$\Btrig$ (Current). Historical and $F_{\mathrm{target}}$ / AR trajectories = bh3; HCR inputs from bh1. Under $F_{\mathrm{target}}$, $F/\Ftar=1$ by construction. $\Delta$ is AR minus Historical.}
+\label{tab:path}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}l rrr r r@{}}
+\toprule
+& \multicolumn{3}{c}{SSB/$\Btrig$} & & \\
+\cmidrule(lr){2-4}
+Stock & Hist & $F_{\mathrm{target}}$ & AR & Hist $F/\Ftar$ & $\Delta$ \\
+\midrule
+Irish Sea cod        & 0.54 & 0.27 & 0.33 & 0.07 & $-0.21$ \\
+Irish Sea whiting    & 0.51 & 4.94 & 4.95 & 5.25 & $+4.45$ \\
+Celtic Sea cod       & 0.02 & 4.22 & 4.23 & 4.44 & $+4.21$ \\
+Celtic Sea whiting   & 0.22 & 0.40 & 0.49 & 1.42 & $+0.27$ \\
+Celtic Sea haddock   & 0.63 & 1.21 & 1.21 & 1.78 & $+0.58$ \\
+NE Atlantic mackerel\tnote{a} & 0.77 & 0.77 & 0.77 & 1.39 & $0.00$ \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}[flushleft]\footnotesize
+\item[a] Mackerel $\Btrig$ is the SAG field (equal to $B_{\mathrm{pa}}$ in the latest SAG row), not the LTMP/$\Blim$ convention on the ICES advice sheet.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+\textbf{Irish Sea cod is the counter-example.} Historical $\bar F$ is already well below $\Ftar$ ($F/\Ftar \approx 0.07$), so fishing at $\Ftar$ \textbf{lowers} terminal SSB relative to history. That is the opposite of the other depleted gadoids, where the AR would have cut $F$. Two mechanisms can produce a realised $F$ this far below the ICES target; this backtest does not yet separate them: mixed-fishery constraint (cod as a recovery / choke stock) versus a mismatch between ICES $\Ftar$ and Operating Model $F_{\mathrm{MSY}}$. An advised-catch series would distinguish those; it is not in this draft.
+
+Constant $\Ftar$ rebuilds \textbf{Irish Sea whiting} and \textbf{Celtic Sea cod} to several times $\Btrig$ (terminal SSB/$\Btrig \approx 4.9$ and $4.2$). For those stocks historical $F$ was several times $\Ftar$; putting the rule in force is a large cut in $F$, and SSB follows.
+
+\section{Future (20 years)}
+
+Both series then follow the ICES HCR for 20 years from their terminal states (bh3; mean recruitment). Reaching ICES $\Btrig$ does not imply Operating Model $\Bmsy$.
+
+\textbf{Celtic Sea whiting:} ICES $\Btrig$ sits materially above Operating Model $\Bmsy$ on this scenario. SSB never reaches $\Btrig$ in 20 years from either start, but it does reach Operating Model $\Bmsy$ in about 16--18 years. A successful rebuild against the Operating Model yardstick can remain ``below trigger'' on the ICES scale.
+
+\textbf{Celtic Sea cod:} from history, $\Btrig$ in about 9 years; Operating Model $\Bmsy$ is not reached in 20 years from either start. The Advice-rule start is already above the trigger, but still short of Operating Model $\Bmsy$. Rebuild to the ICES trigger and rebuild to MSY biomass are different targets.
+
+\textbf{Irish Sea whiting} reaches $\Btrig$ in 2 years from history and $\Bmsy$ in 7; the AR start is already above both. \textbf{Irish Sea cod} reaches $\Bmsy$ first (6--7 years) because that biomass sits below ICES $\Btrig$ (8 years). \textbf{Mackerel} is already above Operating Model $\Bmsy$ while still below the (SAG) trigger.
+
+\section{Caveats and next}
+
+This is one SRR scenario. Historical and Future trajectories are bh3; HCR parameters (ICES $\Ftar$, $\Btrig$, $\Blim$) stay at SAG values on bh1. Operating Model shading is from the simulated bh3 scenario. There is no estimation error, no implementation error, and no Monte Carlo $P(\mathrm{SSB}{<}\Blim)$. Mackerel $\Btrig$ is not on the same published basis as the gadoids.
+
+Next: other SRR scenarios (bh2; Ricker rk1--rk3); an advised-catch series to separate choke/recovery TAC from an Operating Model/$\Ftar$ mismatch; and stochastic replicates for $P(\mathrm{SSB}{<}\Blim)$.
+
+\end{document}

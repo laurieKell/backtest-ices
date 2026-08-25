@@ -1,0 +1,266 @@
+---
+title: "SAM closed-loop counterfactual"
+subtitle: "Methods — historical hcrICES with a simulated SAM observation model"
+author: "Laurence Kell, Sea++"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+SAM closed-loop counterpart of [`04.2_closedLoop.Rmd`](04.2_closedLoop.Rmd).
+This file is `04.4` because [`04.3_rebuild.Rmd`](04.3_rebuild.Rmd) is already
+the 20-year rebuild from historical and perfect-information terminal states.
+
+Same Operating Models as `04.2`, built in
+[`02.0_condition_om.Rmd`](02.0_condition_om.Rmd). Same ICES hockey-stick
+(`FLBacktest::hcrICES`). The difference is the observation model:
+
+| Notebook | `err` | What the HCR sees |
+|----------|-------|-------------------|
+| `04.2` | `NULL` | Perfect information (true Operating Model status) |
+| `04.4` | `FLIndex` | Yearly SAM fit on an Operating Model-derived survey |
+
+This is **simulated full feedback**, not historical SAM peels. Each advice year
+`hcrICES` updates the index from Operating Model numbers, calls
+`FLfse::FLR_SAM` → `SAM2FLStock`, short-term forecasts, then `hcrFn`, and
+implements the TAC on the Operating Model. Equivalent driver:
+`backtest(..., method = "full")`. There is no separate SAM HCR.
+
+ICES \(F_{\mathrm{tar}}\) / \(B_{\mathrm{trigger}}\) / \(B_{\lim}\) stay on
+`eqs` (`eqls[["bh1"]]`). The Operating Model SRR is **bh3**, as in `04.3`.
+`sr_deviances` are `srResiduals` from that bh3 `FLBRP`.
+
+Stocks: Celtic Sea `cod.27.7e-k`, `whg.27.7b-ce-k`, `had.27.7b-k`, and Irish
+Sea whiting `whg.27.7a` (SAM age-structured in `stocks.csv`). Irish Sea cod
+and NEA mackerel are not SAM here.
+
+Default `nits = 1` is a smoke iteration count. Increase `nits` for a
+stochastic OEM; `indexCv` is 0.1 as in `FLBacktest::backtest`.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root="C:/active/blueMarine"
+
+dir.create(file.path(root, "tex/figs"),                          recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                      recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "Rmd/cache", "04.4_closedLoop_sam"), recursive=TRUE, showWarnings=FALSE)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "04.4_closedLoop_sam/"),
+  fig.path  = file.path(root, "tex/figs", "04.4_closedLoop_sam-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLasher)
+  if (requireNamespace("devtools", quietly = TRUE) &&
+      dir.exists("C:/active/flr/backtest"))
+    suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
+  else
+    library(FLBacktest)
+  library(FLfse)
+  library(stockassessment)
+  library(doParallel)
+  library(parallel)
+  library(foreach)})
+
+source(file.path(root, "R/plot_theme.R"))
+
+theme_set(theme_bluemarine_html())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+recDevs_file = file.path(root, "data/om/recDevs.RData")
+if (file.exists(recDevs_file))
+  load(recDevs_file)
+
+om = oms
+if (!exists("eqs")) eqs = eqls[["bh1"]]
+srr = "bh3"
+if (!srr %in% names(eqls))
+  stop("SRR branch '", srr, "' missing from eqls — knit 02.0 first.",
+       call. = FALSE)
+
+sam_sids = c("cod.27.7e-k", "whg.27.7b-ce-k", "had.27.7b-k", "whg.27.7a")
+sam_csv  = as.character(stocks$sid[grepl("SAM", stocks$assessment)])
+sids     = sam_sids[sam_sids %in% names(om) & sam_sids %in% sam_csv]
+
+nits    = 1L
+indexCv = 0.1
+smoke   = FALSE
+
+if (!length(sids))
+  stop("No SAM stocks in oms / stocks.csv.", call. = FALSE)
+
+srDev   = FLQuants(setNames(lapply(sids, function(id)
+  srResiduals(eqls[[srr]][[id]])), sids))
+startYr = setNames(rep(2005, length(sids)), sids)
+endYr   = setNames(sapply(sids, function(id) dims(om[[id]])$maxyear), sids)
+
+if (isTRUE(smoke)) {
+  sids_run = sids[1]
+  endYr[sids_run] = min(startYr[sids_run] + 2L, endYr[sids_run])
+} else {
+  sids_run = sids
+}
+```
+
+# Observation model
+
+`samIndex` on ages excluding recruitment and the plus group (prototype
+`_sam.Rmd`; `hcrICES` then updates `index[, year]` from Operating Model
+`stock.n`). The index slot is catchability × lognormal noise (`indexCv`),
+not a stored catch-at-age series — `hcrICES` overwrites it each year from
+the Operating Model. FLSAM is not used; the assessment is `FLfse` +
+`stockassessment`.
+
+```{r oem}
+samOem = function(stk, start, end, lag = 1, indexCv = 0.1, nits = 1L) {
+  if (nits > 1L && dims(stk)$iter == 1)
+    stk = propagate(stk, nits)
+  stock.n(stk)[is.na(stock.n(stk))] = 1e3
+  stock.n(stk) = qmax(stock.n(stk), 1e-2)
+
+  amin = range(stk)["min"] + 1
+  amax = range(stk)["plusgroup"] - 1
+  idx  = samIndex(trim(stk, age = ac(amin:amax)))
+
+  yrs = intersect(ac((start - lag):end), dimnames(index(idx))$year)
+  index(idx)[] = 1
+  if (length(yrs))
+    index(idx)[, yrs] = 1
+  index(idx) = index(idx) %*%
+    rlnorm(nits, index(idx) %=% 0, indexCv) %*%
+    rlnorm(nits, index(idx)[1] %=% 0, indexCv)
+  idx
+}
+```
+
+# Closed-loop `hcrICES`
+
+One stock failure does not stop the rest (`try`). Workers load **FLfse**,
+**stockassessment**, and **FLBacktest**. Timing: `start = 2005`,
+`end = dims(om)$maxyear`, `lag = 1`, `interval = 1`, `implErr = 0`.
+
+```{r scenario-hcr}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLasher",
+             "FLfse", "stockassessment")
+ncores = max(1L, min(length(sids_run), detectCores() - 4L))
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+closedLoopSam = list()
+failed = character()
+tryCatch({
+  clusterExport(cl, c("flr_pkgs", "om", "eqls", "eqs", "srDev", "samOem",
+                      "startYr", "endYr", "srr", "nits", "indexCv"),
+                envir = environment())
+  clusterEvalQ(cl, {
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    if (requireNamespace("devtools", quietly = TRUE) &&
+        dir.exists("C:/active/flr/backtest"))
+      suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
+    else
+      library(FLBacktest)
+    NULL
+  })
+  runs = foreach(id = sids_run,
+                 .packages = flr_pkgs,
+                 .errorhandling = "pass",
+                 .export = c("om", "eqls", "eqs", "srDev", "samOem",
+                             "startYr", "endYr", "srr", "nits", "indexCv")) %dopar% {
+    tryCatch({
+      set.seed(1000L + match(id, names(om)))
+      stk = om[[id]]
+      if (nits > 1L && dims(stk)$iter == 1)
+        stk = propagate(stk, nits)
+      idx = samOem(stk, start = startYr[id], end = endYr[id],
+                   lag = 1, indexCv = indexCv, nits = nits)
+      hcrICES(stk, eql = eqls[[srr]][[id]],
+              sr_deviances = srDev[[id]],
+              params = hcrParams(eqs[[id]]),
+              start = startYr[id], end = endYr[id],
+              lag = 1, interval = 1,
+              err = idx, implErr = 0)[[1]]
+    }, error = function(e) e)
+  }
+  names(runs) = sids_run
+  ok = vapply(runs, function(x) is(x, "FLStock"), logical(1))
+  failed = sids_run[!ok]
+  closedLoopSam = if (any(ok)) do.call(FLStocks, runs[ok]) else list()
+}, finally = stopCluster(cl))
+
+save(closedLoopSam, sids, sids_run, failed, nits, indexCv, srr, startYr, endYr,
+     file = file.path(root, "data/results/04.4_closedLoop_sam.RData"))
+```
+
+# Comparison (optional)
+
+SSB, \(F\) and catch against the historical assessment and, if present, the
+perfect-information closed loop from `03.2_closedLoop.RData` (`04.2`).
+
+```{r smoke-plot, fig.height=7, fig.width=9}
+perfect_info = function(id, file) {
+  if (!file.exists(file)) return(NULL)
+  e = new.env()
+  load(file, envir = e)
+  if (!exists("closedLoop", envir = e, inherits = FALSE)) return(NULL)
+  cl = e$closedLoop
+  if (is.list(cl) && !is.null(cl[["SRR"]])) {
+    nm = intersect(c(srr, "bh1"), names(cl[["SRR"]]))
+    if (!length(nm)) nm = names(cl[["SRR"]])[1]
+    if (length(nm) && !is.null(cl[["SRR"]][[nm[1]]][[id]]))
+      return(cl[["SRR"]][[nm[1]]][[id]])
+  }
+  if (is(cl, "FLStocks") && id %in% names(cl))
+    return(cl[[id]])
+  NULL
+}
+
+pi_file = file.path(root, "data/results/03.2_closedLoop.RData")
+if (is(closedLoopSam, "FLStocks") && length(closedLoopSam)) {
+  for (id in names(closedLoopSam)) {
+    stks = list(Historical = om[[id]], SAM = closedLoopSam[[id]])
+    pi = perfect_info(id, pi_file)
+    if (!is.null(pi))
+      stks[["Perfect"]] = pi
+    nm = as.character(subset(stocks, sid == id)$name)
+    print(plot(do.call(FLStocks, stks),
+               metrics = list(F = fbar, SB = ssb, C = catch),
+               probs = c(0.75, 0.5, 0.25)) +
+            labs(title = nm) +
+            geom_vline(xintercept = startYr[id], linetype = 3,
+                       colour = bm_col("muted")))
+  }
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAM closed loop versus historical (and
+perfect information when `04.2` results are a `list(SRR = …)`). Trajectories
+are the **bh3** Operating Model. Failures in `failed` did not produce a
+stock.

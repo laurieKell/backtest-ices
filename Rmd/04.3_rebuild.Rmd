@@ -1,0 +1,173 @@
+---
+title: "Rebuild under the ICES HCR"
+subtitle: "20-year projections from the historical and closed-loop terminal states"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+Take each stock in its **terminal year**, extend it 20 years with `fwdWindow`
+(FLBRP mean biology), and apply the ICES hockey-stick (`hcrICES`) with mean
+recruitment. After the terminal year the observed recruitment-residual history
+is switched off and biology is held at recent means, so this is mean
+productivity, not a continuation of the historical productivity series.
+Two starting states:
+
+- **Historical** — latest WGCSE `FLStock` (`oms`)
+- **Advice rule** — closed-loop `hcrICES` from
+  [`04.2_closedLoop.Rmd`](04.2_closedLoop.Rmd)
+
+The question is whether a stock that is still below \(MSYB_{\mathrm{trigger}}\)
+recovers, how long that takes, and whether SSB reaches \(B_{\mathrm{MSY}}\).
+
+HCR parameters (`ftar`, `btrig`, `blim`) are ICES values on `eqs`
+(`eqls[["bh1"]]`, held fixed). The Operating Model SRR is **bh3**
+(Beverton–Holt with an \(R_0\) prior from the hockey-stick).
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root="C:/active/blueMarine"
+
+dir.create(file.path(root, "tex/figs"),                  recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),              recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "Rmd/cache", "04.3_rebuild"), recursive=TRUE, showWarnings=FALSE)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "04.3_rebuild/"),
+  fig.path  = file.path(root, "tex/figs", "04.3_rebuild-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLasher)
+  library(FLBacktest)
+})
+
+if (!exists("project_hcr", mode = "function"))
+  suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
+
+source(file.path(root, "R/plot_theme.R"))
+theme_set(theme_bluemarine_html())
+```
+
+```{r load}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+load(file.path(root, "data/results/03.2_closedLoop.RData"))
+source(file.path(root, "R/om.R"))
+
+sids = as.character(stocks$sid)
+require_om_gate(root, sids)
+eqs  = eqls[["bh1"]]
+srr  = "bh3"
+if (!srr %in% names(closedLoop[["SRR"]]) || !srr %in% names(eqls))
+  stop("SRR branch '", srr, "' missing from closedLoop or eqls")
+ar   = closedLoop[["SRR"]][[srr]]
+nYears = 20L
+
+ices_rp = function(id) {
+  rp_hcr = refpts(eqs[[id]])
+  rp_om  = refpts(eqls[[srr]][[id]])
+  c(Blim  = c(rp_hcr["Blim",        "ssb"]),
+    Btrig = c(rp_hcr["MSYBtrigger", "ssb"]),
+    BMSY  = c(rp_om["msy",          "ssb"]),
+    FMSY  = c(rp_hcr["FMSY",        "harvest"]))
+}
+```
+
+# Terminal status
+
+SSB and \(F\) in the last assessment year, before the 20-year projection.
+
+```{r terminal, results='hide'}
+starts = list(Historical = oms, "Advice rule" = ar)
+
+terminal = ldply(names(starts), function(pol) {
+  ldply(sids, function(id) {
+    rp  = ices_rp(id)
+    stk = starts[[pol]][[id]]
+    yr  = dims(stk)$maxyear
+    SB  = c(iterMedians(ssb(stk)[, ac(yr)]))
+    Fb  = c(iterMedians(fbar(stk)[, ac(yr)]))
+    data.frame(
+      policy = pol, sid = id, year = yr,
+      SSB_Blim  = SB / rp[["Blim"]],
+      SSB_Btrig = SB / rp[["Btrig"]],
+      SSB_BMSY  = SB / rp[["BMSY"]],
+      F_FMSY    = Fb / rp[["FMSY"]],
+      below_Btrig = SB < rp[["Btrig"]],
+      below_BMSY  = SB < rp[["BMSY"]])
+  })
+})
+terminal = merge(terminal, stocks[, c("sid", "name")], by = "sid")
+terminal$name   = factor(terminal$name,   levels = levels(stocks$name))
+terminal$policy = factor(terminal$policy, levels = names(starts))
+terminal = terminal[order(terminal$name, terminal$policy), ]
+```
+
+# Projection
+
+`fwdWindow` to terminal year \(+\) `r nYears`, then `hcrICES` with
+deviations \(= 1\) (`FLBacktest::project_hcr`). Rebuild time is the first
+projected year in which median SSB reaches the threshold
+(`FLBacktest::years_to`). Already above is 0 years; `NA` means not
+reached within `r nYears` years.
+
+```{r project, results='hide'}
+future = lapply(starts, function(stks) {
+  FLStocks(setNames(llply(sids, function(id) {
+    project_hcr(stks[[id]], eqls[[srr]][[id]], hcrParams(eqs[[id]]), nYears)
+  }), sids))
+})
+
+rebuild = ldply(names(starts), function(pol) {
+  ldply(sids, function(id) {
+    rp    = ices_rp(id)
+    maxyr = subset(terminal, sid == id & policy == pol)$year[1]
+    s     = ssb(future[[pol]][[id]])
+    term  = subset(terminal, sid == id & policy == pol)
+    data.frame(
+      policy = pol, sid = id,
+      years_to_Btrig = if (isTRUE(term$below_Btrig[1]))
+        years_to(s, rp[["Btrig"]], maxyr) else 0L,
+      years_to_BMSY = if (isTRUE(term$below_BMSY[1]))
+        years_to(s, rp[["BMSY"]], maxyr) else 0L)
+  })
+})
+rebuild = merge(rebuild, terminal[
+  , c("sid", "policy", "name", "SSB_Btrig", "SSB_BMSY")],
+  by = c("sid", "policy"))
+rebuild$name   = factor(rebuild$name,   levels = levels(stocks$name))
+rebuild$policy = factor(rebuild$policy, levels = names(starts))
+rebuild = rebuild[order(rebuild$name, rebuild$policy), ]
+
+save(future, terminal, rebuild, nYears, sids, stocks, srr,
+     file = file.path(root, "data/results/04.3_rebuild.RData"))
+```
+
+Trajectories of SSB, \(F\), recruitment and catch are shown in
+[`06.0_report.Rmd`](06.0_report.Rmd).

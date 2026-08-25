@@ -1,0 +1,144 @@
+---
+title: "Closed-loop counterfactual simulation"
+subtitle: "Methods — historical hcrICES, six SRRs, three uncertainty treatments"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+**Methods — Counterfactual simulation** (`tex/project-markup.tex`): historical
+closed-loop `hcrICES` from 2015 to the terminal year, starting from the
+realised assessment (`oms`), compared with the realised assessment.
+
+Same Operating Models as [`04.1_openLoop.Rmd`](04.1_openLoop.Rmd),
+built in [`02.0_condition_om.Rmd`](02.0_condition_om.Rmd) (`oms`, `eqls`).
+The only difference is the harvest policy: ICES HCR here, constant ICES
+\(F_{\mathrm{MSY}}\) there. The Advice rule does **not** start from the
+open-loop \(F_{\mathrm{target}}\) trajectory.
+
+| Uncertainty | Operating Model | `sr_deviances` |
+|-------------|:---------------:|----------------|
+| `rec` | `oms` | historical rec / geometric mean |
+| `srr` | `oms` | `srResiduals(eq)` |
+| `M` | as `srr`, plus autocorrelated \(M\) on 100 iterations | `srResiduals(eq)` |
+
+ICES \(F_{\mathrm{tar}}\) / \(B_{\mathrm{trigger}}\) / \(B_{\lim}\) are held
+fixed (`hcrParams` from `eqs`). Each SRR supplies its own biology /
+stock–recruitment. Historical projections keep the assessment's year-specific
+\(M\), mass and maturity and replay recruitment residuals, so the productivity
+that actually occurred is held common across policies.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root="C:/active/blueMarine"
+
+dir.create(file.path(root, "tex/figs"),                     recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                 recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "Rmd/cache", "04.2_closedLoop"), recursive=TRUE, showWarnings=FALSE)
+
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "04.2_closedLoop/"),
+  fig.path  = file.path(root, "tex/figs", "04.2_closedLoop-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLasher)
+  library(FLBacktest)
+  library(doParallel)
+  library(parallel)
+  library(foreach)})
+
+source(file.path(root, "R/plot_theme.R"))
+
+theme_set(theme_bluemarine_html())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+
+sids = as.character(stocks$sid)
+om   = oms
+if (!exists("eqs")) {
+  if (!"bh1" %in% names(eqls))
+    stop("eqs missing and eqls[['bh1']] not found — knit 02.0 first.",
+         call. = FALSE)
+  eqs = eqls[["bh1"]]
+}
+source(file.path(root, "R/om.R"))
+require_om_gate(root, sids)
+
+srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
+startYr = setNames(rep(2015, length(sids)), sids)
+endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+```
+
+# Closed-loop `hcrICES`
+
+ICES HCR on the historical assessment (`oms`) from **2015**, all six SRR
+scenarios. Each `hcrICES` is `FLStocks(foreach(id = sids))`. The 2015 stock
+state is the assessment, not the open-loop \(F_{\mathrm{target}}\) run.
+
+```{r scenario-hcr}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLBacktest", "FLasher")
+ncores = max(1L, detectCores() - 4L)
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+tryCatch({
+  clusterExport(cl, c("flr_pkgs", "om", "eqls", "eqs", "srDev",
+                      "startYr", "endYr"), envir = environment())
+  clusterEvalQ(cl, {
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    NULL
+  })
+  scen2 = list()
+  for (nm in names(eqls)) {
+    clusterExport(cl, "nm", envir = environment())
+    scen2[[nm]] = FLStocks(foreach(id = sids,
+                                   .packages = flr_pkgs,
+                                   .export = c("om", "eqls", "eqs", "srDev",
+                                               "startYr", "endYr", "nm")) %dopar% {
+      hcrICES(om[[id]], eql = eqls[[nm]][[id]],
+              sr_deviances = srDev[[nm]][[id]],
+              params = hcrParams(eqs[[id]]),
+              start = startYr[id], end = endYr[id],
+              err = NULL, implErr = 0)[[1]]
+    })
+    names(scen2[[nm]]) = sids
+  }
+}, finally = stopCluster(cl))
+closedLoop = list("SRR" = scen2)
+
+save(closedLoop, file=file.path(root, "data/results/03.2_closedLoop.RData"))
+```
+
+Comparison of historical, \(F_{\mathrm{tar}}\) and the HCR, time below
+\(B_{\lim}\) / \(MSYB_{\mathrm{trigger}}\), current status and rebuild
+times are in [`06.0_report.Rmd`](06.0_report.Rmd).

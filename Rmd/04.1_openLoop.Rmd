@@ -1,0 +1,152 @@
+---
+title: "Open-loop benchmark projections"
+subtitle: "Methods — historical fwd at ICES FMSY, six SRRs, three uncertainty treatments"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+**Methods — Benchmark projections** (`tex/project-markup.tex`): historical
+open-loop `fwd` at ICES \(F_{\mathrm{MSY}}\) from 1990 (or two years after the first assessment year if later) to the terminal year,
+compared with the realised assessment.
+
+Same Operating Models as [`04.2_closedLoop.Rmd`](04.2_closedLoop.Rmd),
+built in [`02.0_condition_om.Rmd`](02.0_condition_om.Rmd) (`oms`, `eqls`).
+The only difference is the harvest policy: constant ICES \(F_{\mathrm{MSY}}\)
+from 1990 here, ICES HCR from 2015 there. Both start from the historical
+assessment (`oms`).
+
+| Uncertainty | Operating Model | `fwd` residuals |
+|-------------|:---------------:|-----------------|
+| `rec` | `oms` | historical rec / geometric mean |
+| `srr` | `oms` | `srResiduals(eq)` |
+| `M` | as `srr`, plus autocorrelated \(M\) on 100 iterations | `srResiduals(eq)` |
+
+ICES \(F_{\mathrm{MSY}}\) is held fixed; each SRR supplies its own biology /
+stock–recruitment. Historical projections keep the assessment's year-specific
+\(M\), mass and maturity and replay recruitment residuals, so the productivity
+that actually occurred is held common across policies.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+root <- "C:/active/blueMarine"
+dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "Rmd/cache", "04.1_openLoop"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE, 
+  warning   = FALSE, 
+  message   = FALSE, 
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(root, "Rmd/cache", "04.1_openLoop/"),
+  fig.path  = file.path(root, "tex/figs", "04.1_openLoop-"),
+  fig.width = 9, 
+  fig.height= 5, 
+  dev       ="png")
+Fig=0
+Tab=0
+```
+
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(ggplotFL)
+  library(ggplot2)
+  library(FLBacktest)
+  library(FLasher)
+  library(doParallel)
+  library(parallel)
+  library(foreach)
+})
+source(file.path(root, "R/plot_theme.R"))
+source(file.path(root, "R/loadStocks.R"))
+source(file.path(root, "R/om.R"))
+theme_set(theme_bluemarine_html())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+if (!exists("eqs")) {
+  if (!"bh1" %in% names(eqls))
+    stop("eqs missing and eqls[['bh1']] not found — knit 02.0 first.",
+         call. = FALSE)
+  eqs = eqls[["bh1"]]
+}
+sids = as.character(stocks$sid)
+source(file.path(root, "R/om.R"))
+require_om_gate(root, sids)
+om   = oms
+srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
+recDev = FLQuants(lapply(oms, function(x) {
+  r = rec(x)
+  r %/% exp(mean(log(c(r)), na.rm = TRUE))
+}))
+startYr = setNames(vapply(sids, function(id)
+  openloop_start(om[[id]]), integer(1L)), sids)
+endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+```
+
+# Open-loop `fwd`
+
+ICES \(F_{\mathrm{MSY}}\) on the historical assessment Operating Models (`oms`),
+all six SRR scenarios. Each `fwd` is `FLStocks(foreach(id = sids))`.
+Unconstrained BH (`eqs` / `bh1`) is the example below. Simulations start in 1990 from `oms` where the assessment allows, or in
+the second year after `minyear` if the series begins after 1990.
+
+```{r scenario-fwd}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLBacktest", "FLasher")
+ncores = max(1L, detectCores() - 4L)
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+tryCatch({
+  clusterExport(cl, "flr_pkgs")
+  clusterEvalQ(cl, {
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    NULL
+  })
+  clusterExport(cl, c("om", "eqls", "eqs", "recDev", "srDev",
+                      "startYr", "endYr", "sids"), envir = environment())
+  scen  = list()
+  scen2 = list()
+  for (nm in names(eqls)) {
+    clusterExport(cl, "nm", envir = environment())
+    scen[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                  .export = c("om", "eqls", "eqs", "recDev",
+                                              "startYr", "endYr", "nm")) %dopar% {
+      fices = c(refpts(eqs[[id]])["FMSY", "harvest"])
+      ftrg  = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fices
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]], residuals = recDev[[id]])
+    })
+    names(scen[[nm]]) = sids
+
+    scen2[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                   .export = c("om", "eqls", "eqs", "srDev",
+                                               "startYr", "endYr", "nm")) %dopar% {
+      fices = c(refpts(eqs[[id]])["FMSY", "harvest"])
+      ftrg  = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fices
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]],
+          residuals = srDev[[nm]][[id]])
+    })
+    names(scen2[[nm]]) = sids
+  }
+}, finally = stopCluster(cl))
+ftar  = scen[["bh1"]]
+ftar2 = scen2[["bh1"]]
+openLoop = list(Recruits = scen, SRR = scen2)
+save(openLoop, startYr, endYr, file = file.path(root, "data/results/03.1_openLoop.RData"))
+```
+

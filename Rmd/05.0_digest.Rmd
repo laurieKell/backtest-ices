@@ -1,0 +1,94 @@
+---
+title: "All-stock digest"
+subtitle: "Pick case studies after the generic backtest — not before"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+One page per knit of **every** stock that passed the Operating Model gate
+and has open- and closed-loop results. Use this to choose which stocks
+need a `06.1`-style case study. Do not put SAM, EqSim essays or
+presentation layout here.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+root = "C:/active/blueMarine"
+suppressPackageStartupMessages(suppressWarnings(library(knitr)))
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      error = FALSE)
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(FLBRP)
+  library(plyr)
+  library(FLBacktest)
+})
+source(file.path(root, "R/om.R"))
+load_om(root)
+require_om_gate(root, as.character(stocks$sid))
+load(file.path(root, "data/results/03.1_openLoop.RData"))
+load(file.path(root, "data/results/03.2_closedLoop.RData"))
+load(file.path(root, "data/results/03.3_lterm_eq.RData"))
+eqs = eqls[["bh1"]]
+srr = "bh1"
+if (!srr %in% names(openLoop[["SRR"]]) || !srr %in% names(closedLoop[["SRR"]]))
+  stop("openLoop/closedLoop SRR has no '", srr, "' — knit 04.1 and 04.2.",
+       call. = FALSE)
+```
+
+```{r digest}
+term = function(stk, yr) {
+  c(SSB = c(ssb(stk)[, ac(yr)]), F = c(fbar(stk)[, ac(yr)]))
+}
+
+tab = ldply(as.character(stocks$sid), function(id) {
+  if (is.null(openLoop[["SRR"]][[srr]][[id]]))
+    stop("Missing openLoop$SRR$", srr, "$", id, " — knit 04.1.", call. = FALSE)
+  if (is.null(closedLoop[["SRR"]][[srr]][[id]]))
+    stop("Missing closedLoop$SRR$", srr, "$", id, " — knit 04.2.", call. = FALSE)
+  yr = dims(oms[[id]])$maxyear
+  rp = refpts(eqs[[id]])
+  h  = term(oms[[id]], yr)
+  o  = term(openLoop[["SRR"]][[srr]][[id]], yr)
+  c_ = term(closedLoop[["SRR"]][[srr]][[id]], yr)
+  data.frame(
+    sid = id,
+    name = as.character(stocks$name[match(id, stocks$sid)]),
+    year = yr,
+    gate = {
+      p = lterm_eq$pass
+      isTRUE(p$pass[match(id, as.character(p$sid))])
+    },
+    hist_SSB_Btrig = h["SSB"] / c(rp["MSYBtrigger", "ssb"]),
+    ftar_SSB_Btrig = o["SSB"] / c(rp["MSYBtrigger", "ssb"]),
+    ar_SSB_Btrig   = c_["SSB"] / c(rp["MSYBtrigger", "ssb"]),
+    hist_F_Ftar    = h["F"] / c(rp["FMSY", "harvest"]),
+    ftar_F_Ftar    = o["F"] / c(rp["FMSY", "harvest"]),
+    ar_F_Ftar      = c_["F"] / c(rp["FMSY", "harvest"]),
+    stringsAsFactors = FALSE)
+})
+```
+
+**Table 1**. Terminal year versus ICES $B_{\mathrm{trigger}}$ and
+$F_{\mathrm{target}}$. `bh1` branch. Case studies currently:
+Irish Sea whiting and Celtic Sea cod (`06.1_TwoStocks.Rmd`).
+
+```{r table}
+knitr::kable(
+  tab[, c("name", "sid", "year", "gate",
+          "hist_SSB_Btrig", "ftar_SSB_Btrig", "ar_SSB_Btrig",
+          "hist_F_Ftar")],
+  digits = 2, row.names = FALSE,
+  col.names = c("Stock", "SID", "Year", "Gate",
+                "Hist SSB/$B_{trig}$", "$F_{tar}$ SSB/$B_{trig}$",
+                "AR SSB/$B_{trig}$", "Hist $F/F_{tar}$"))
+```
