@@ -26,16 +26,6 @@ loadFLStock <- function(rdata, path) {
     stk <- FLCore::window(stk, end = yr_end)
   stk}
 
-## Kept as an alias for notebooks that still source this file.
-## Prefer FLBacktest::cleanStock — do not maintain a second implementation.
-cleanFLStock <- function(stk) {
-  if (!requireNamespace("FLBacktest", quietly = TRUE))
-    stop("Install FLBacktest; cleanFLStock() is an alias for cleanStock().",
-         call. = FALSE)
-  FLBacktest::cleanStock(stk)
-}
-
-
 stock_name <- function(sid, stocks) {
   as.character(stocks$name[match(as.character(sid), as.character(stocks$sid))])
 }

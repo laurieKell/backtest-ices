@@ -170,8 +170,8 @@ xelatex beamer.tex
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
 | `data/reference/`, `data/WGCSE/`, `data/om/` | `data/results/`, `data/interim/` |
-| `R/`, `Rmd/`, `scripts/`, `tex/` sources | Knitted `Rmd/*.html`, `Rmd/cache/` |
-| `renv.lock` | `docs/` (status notes, drafts, advice PDFs, literature) |
+| `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `tex/` | Knitted `Rmd/*.html`, `Rmd/cache/` |
+| `renv.lock` | `docs/`, `R/_local/`, `scripts/_local/` (drafts, one-shot migrate helpers) |
 | | `backUp/` |
 
 ---

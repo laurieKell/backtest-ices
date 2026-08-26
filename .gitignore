@@ -65,6 +65,9 @@ blueMarine.lnk
 Pictures/
 R/data/
 docs/
+R/_local/
+scripts/_local/
+scripts/*.log
 
 # OS
 .DS_Store

@@ -105,32 +105,3 @@ advice_status_block <- function(advice, sid, stocks = NULL) {
     tab, row.names = FALSE, escape = FALSE,
     col.names = c("", "Fishing pressure", "Stock size"))
 }
-
-# One row per stock, same cells, for the all-stock note.
-advice_status_table <- function(advice, sids, stocks = NULL) {
-  tab <- do.call(rbind, lapply(sids, function(id) {
-    sh <- advice_row(advice, id)
-    nm <- if (!is.null(stocks) && "sid" %in% names(stocks))
-      as.character(stocks$name[match(id, stocks$sid)]) else id
-    data.frame(
-      stock = nm,
-      sid = id,
-      sheet = sh$ices_advice_year,
-      msy_f = sh$msy_f,
-      msy_ssb = sh$msy_ssb,
-      pa_f = paste0(sh$pa_f_fpa, " $F_{\\mathrm{pa}}$; $F_{\\lim}$ ",
-                    sh$pa_f_flim),
-      pa_ssb = sh$pa_ssb_label,
-      advice = advice_catch_lab(sh),
-      stringsAsFactors = FALSE)
-  }))
-  knitr::kable(
-    tab,
-    row.names = FALSE,
-    col.names = c("Stock", "SID", "Sheet", "MSY $F$", "MSY SSB",
-                  "PA $F$", "PA SSB", "Advice catch"),
-    caption = paste0(
-      "ICES stock status (advice-sheet Table 1 layout: MSY and precautionary ",
-      "approach). Wording from `docs/advice`. $F_{\\lim}$ is not defined on ",
-      "these sheets."))
-}
