@@ -16,13 +16,17 @@ renv/python/
 renv/settings.d/
 renv/.gitignore
 
-# Data (downloaded assessments and ICES extracts)
+# Data — keep only pipeline *inputs* on GitHub
+# (reference inventory + WGCSE FLStock/SAM assessments)
 data/raw/**
 !data/raw/.gitkeep
 data/interim/**
 !data/interim/.gitkeep
 data/results/**
 !data/results/.gitkeep
+data/om/**
+!data/om/.gitkeep
+data/sdGraphs/**
 
 # Knitr / R Markdown artefacts
 Rmd/cache/

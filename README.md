@@ -94,7 +94,7 @@ In R:
 source("R/paths.R")
 bm_root()                              # should print this clone’s path
 file.exists(file.path(bm_root(), "data/reference/stocks.csv"))
-file.exists(file.path(bm_root(), "data/om/oms.RData"))
+file.exists(file.path(bm_root(), "data/WGCSE/cod.27.7a.RData"))
 library(FLBacktest)
 library(icesdata)
 ```
@@ -105,9 +105,8 @@ If `bm_root()` fails, set the working directory to the repo root (or knit from `
 
 ## 4. Re-run the analysis
 
-`data/results/` is **gitignored** — you must knit (or run the pipeline) to rebuild it.
-`data/WGCSE/` and `data/om/` are in the repo so you can start from OM conditioning
-or from the gate without re-downloading assessments.
+Committed inputs are `data/reference/` and `data/WGCSE/` only.  
+`data/om/`, `data/results/`, and `data/interim/` are **gitignored** — rebuild them with the pipeline (start at `om`).
 
 ### Full pipeline (recommended)
 
@@ -169,7 +168,7 @@ xelatex beamer.tex
 
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
-| `data/reference/`, `data/WGCSE/`, `data/om/` | `data/results/`, `data/interim/` |
+| `data/reference/`, `data/WGCSE/` (pipeline inputs) | `data/om/`, `data/results/`, `data/interim/`, `data/raw/` |
 | `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
 | `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
 | | `R/_local/`, `scripts/_local/`, `backUp/` |
