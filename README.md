@@ -10,137 +10,105 @@ Northeast Atlantic mackerel).
 | **Shared FLR engine** | [FLBacktest](https://github.com/laurieKell/FLBacktest) |
 | **Sibling app** | [BIM-Resilience](https://github.com/laurieKell/BIM-Resilience) |
 
-Formerly *blueMarine*. This README is the checklist for **installing and re-running on a new PC**.
+Formerly *blueMarine*. Follow **Virgin machine test** below on a clean PC.
 
 ---
 
-## 0. Prerequisites
+## Virgin machine test
+
+Do these steps **in order** from a shell, with working directory = the clone root.
+
+### 1. Prerequisites
 
 | Need | Notes |
 |------|--------|
-| **R** | **4.6.1** (matches `renv.lock`; project library under `renv/library/.../R-4.6/`) |
-| **Git** | SSH or HTTPS access to this repo and to `laurieKell/FLBacktest` |
-| **Rtools** (Windows) | **Rtools45** (works with R 4.6.x) to compile FLR / TMB packages |
-| **Network** | CRAN + GitHub (`flr/*`, `laurieKell/FLBacktest`) |
-| **Optional** | XeLaTeX — only if you build PDFs from local `tex/` sources |
+| **R** | **4.6.1** (must match `renv.lock`) |
+| **Rtools** (Windows) | **Rtools45** — needed to compile FLR / TMB |
+| **Git** | Access to this repo + `laurieKell/FLBacktest` + `flr/*` |
+| **Network** | CRAN, GitHub, [stockassessment.org](https://www.stockassessment.org) (SAM step) |
 
----
+In RStudio: set the R version to **4.6.1**, then open this project folder.
 
-## 1. Clone
-
-```bash
-git clone git@github.com:laurieKell/backtest-ices.git
-cd backtest-ices
-```
-
-HTTPS:
+### 2. Clone
 
 ```bash
 git clone https://github.com/laurieKell/backtest-ices.git
 cd backtest-ices
 ```
 
-Open the project at this folder (the one with `README.md` / `renv.lock`).
+(SSH: `git clone git@github.com:laurieKell/backtest-ices.git`)
 
----
-
-## 2. Install R packages (renv)
-
-From the **project root**:
+### 3. Install packages
 
 ```bash
 Rscript -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
 Rscript -e "renv::restore()"
 ```
 
-Or in R:
+First restore can take a long time (FLR + TMB compile).
 
-```r
-install.packages("renv", repos = "https://cloud.r-project.org")
-renv::restore()
-```
-
-`renv::restore()` installs everything in `renv.lock` (CRAN + GitHub FLR packages,
-including FLBacktest). First restore can take a long time.
-
-### If restore fails
-
-Install the FLR stack by hand, then retry:
+If `renv::restore()` fails on FLR packages:
 
 ```r
 install.packages(c("remotes", "devtools"), repos = "https://cloud.r-project.org")
 remotes::install_github(c(
   "flr/FLCore@devel", "flr/FLBRP", "flr/FLasher", "flr/ggplotFL",
-  "flr/icesdata", "flr/FLRebuild",
-  "laurieKell/FLBacktest"
+  "flr/icesdata", "flr/FLRebuild", "flr/FLfse",
+  "laurieKell/FLBacktest",
+  "fishfollower/SAM/stockassessment"
 ))
-# then:
 renv::restore()
 ```
 
----
+### 4. Build SAM FLStocks
 
-## 3. Smoke test
+The repo ships only two FLStocks (Irish Sea cod, NEA mackerel).  
+Build the four SAM stocks before the pipeline:
 
-From the **project root**:
+```bash
+Rscript scripts/build_flstock_from_sam.R
+```
+
+Needs `stockassessment` and `FLfse`. Optional cache of raw fits:
+
+```bash
+Rscript scripts/build_flstock_from_sam.R --cache-fit
+```
+
+### 5. Smoke checks
 
 ```bash
 Rscript scripts/run_pipeline.R --list
 ```
-
-In R:
 
 ```r
 source("R/paths.R")
-bm_root()                              # should print this clone’s path
-file.exists(file.path(bm_root(), "data/reference/stocks.csv"))
-file.exists(file.path(bm_root(), "data/WGCSE/cod.27.7a.RData"))
-file.exists(file.path(bm_root(), "data/WGCSE/mac.27.nea.RData"))
-# After: Rscript scripts/build_flstock_from_sam.R
-file.exists(file.path(bm_root(), "data/WGCSE/had.27.7b-k.RData"))
-library(FLBacktest)
-library(icesdata)
+stopifnot(nzchar(bm_root()))
+stopifnot(file.exists(file.path(bm_root(), "data/reference/stocks.csv")))
+stopifnot(file.exists(file.path(bm_root(), "data/WGCSE/cod.27.7a.RData")))
+stopifnot(file.exists(file.path(bm_root(), "data/WGCSE/mac.27.nea.RData")))
+stopifnot(file.exists(file.path(bm_root(), "data/WGCSE/had.27.7b-k.RData")))
+stopifnot(requireNamespace("FLBacktest", quietly = TRUE))
+stopifnot(requireNamespace("icesdata", quietly = TRUE))
+message("Smoke OK")
 ```
 
-If `bm_root()` fails, set the working directory to the repo root (or knit from `Rmd/`).
-
----
-
-## 4. Re-run the analysis
-
-Committed inputs are `data/reference/` plus non-SAM FLStocks  
-(`data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData`).  
-`data/om/`, `data/results/`, `data/interim/`, `data/WGCSE/sam/`, and the four  
-SAM-derived FLStocks are **gitignored**.
-
-### Rebuild SAM FLStocks from stockassessment.org
-
-Four stocks have a `sam_web` key in `data/reference/stocks.csv`. On a new machine,
-build their `data/WGCSE/*.RData` before running the pipeline
-([stockassessment.org](https://www.stockassessment.org)):
+### 6. Run the pipeline
 
 ```bash
-# Needs packages: stockassessment, FLfse, FLCore
-Rscript scripts/build_flstock_from_sam.R
-# Optional: one stock, and/or cache the raw fit under data/WGCSE/sam/
-Rscript scripts/build_flstock_from_sam.R --sid had.27.7b-k --cache-fit
-```
-
-Irish Sea cod and NEA mackerel are not SAM — those FLStocks stay in the repo.
-
-### Full pipeline (recommended)
-
-```bash
-# Default: OM → gate → open/closed loop → rebuild → digest → cases → report
+# Default: OM → gate → open/closed → rebuild → digest → cases → report
 Rscript scripts/run_pipeline.R
 
-# Include screening from the start
+# Include screening as well
 Rscript scripts/run_pipeline.R --all
+```
 
-# One step or from a named step
-Rscript scripts/run_pipeline.R --only gate
-Rscript scripts/run_pipeline.R --from closed
-Rscript scripts/run_pipeline.R --list
+Useful variants:
+
+```bash
+Rscript scripts/run_pipeline.R --only om
+Rscript scripts/run_pipeline.R --from gate
+Rscript scripts/run_pipeline.R --only report
 ```
 
 | Step | Notebook | Writes |
@@ -156,54 +124,33 @@ Rscript scripts/run_pipeline.R --list
 | generic | `06.2_generic.Rmd` | remaining stocks (scn2) |
 | report | `06.0_report.Rmd` | contract figures (loads results only) |
 
-`04.*` **stops** if the long-term OM gate fails (`require_om_gate()`).
+`04.*` stops if the long-term OM gate fails (`require_om_gate()`).
 
-Knit order and notes: [`Rmd/README.md`](Rmd/README.md).  
-Supplement index: [`Rmd/00_supplement.Rmd`](Rmd/00_supplement.Rmd).
-
-### Report-only (after results exist)
-
-```bash
-Rscript scripts/run_pipeline.R --only report
-```
-
-Or open `Rmd/06.0_report.Rmd` and Knit (working directory = project root or `Rmd/`).
+After a successful run, open `Rmd/06.0_report.html`.
 
 ---
 
-## 5. Optional — LaTeX PDFs
-
-Needs **XeLaTeX** and fonts under `tex/imperial/Fonts/`:
-
-```bash
-cd tex
-xelatex paper.tex && bibtex paper && xelatex paper.tex && xelatex paper.tex
-xelatex exec_summary.tex
-xelatex beamer.tex
-```
-
----
-
-## 6. What is / isn’t on GitHub
+## What is / isn’t on GitHub
 
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
 | `data/reference/`, `data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData` | `data/om/`, `data/results/`, `data/interim/`, `data/sdGraphs/`, `data/WGCSE/sam/`, SAM FLStocks |
 | `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `scripts/build_flstock_from_sam.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
-| `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
-| | `R/_local/`, `scripts/_local/`, `backUp/` |
+| `renv.lock` | `docs/`, `tex/` |
+
+Knit order notes: [`Rmd/README.md`](Rmd/README.md).  
+Supplement index: [`Rmd/00_supplement.Rmd`](Rmd/00_supplement.Rmd).
 
 ---
 
-## 7. Deliverables (after a successful run)
+## Optional — LaTeX PDFs
 
-| Item | Location |
-|------|----------|
-| Contract report (HTML) | `Rmd/06.0_report.html` |
-| Supplement | `Rmd/00_supplement.Rmd` + knit chain |
-| Working paper / exec summary / Beamer | local `tex/` (not on GitHub) |
+`tex/` is local-only. Needs **XeLaTeX** and fonts under `tex/imperial/Fonts/` if present:
 
-Draft markdown under local `docs/` and LaTeX under local `tex/` are not published with the repo.
+```bash
+cd tex
+xelatex paper.tex && bibtex paper && xelatex paper.tex && xelatex paper.tex
+```
 
 ---
 
@@ -211,13 +158,13 @@ Draft markdown under local `docs/` and LaTeX under local `tex/` are not publishe
 
 - **Package = generic engine** ([FLBacktest](https://github.com/laurieKell/FLBacktest)).  
   **Application = data, conditioning, narrative** (this repo).
-- Prefer package generics (`hcrICES`, `ltermEq`, `openloop_start`, `geom_flpar_lab`, …) over local copies.
+- Prefer package generics over local copies.
 - Fail loud: knitr `error = FALSE`; do not wrap `fwd` / `hcrICES` in silent `try()`.
 
-### Refreshing `renv.lock` (on a machine that already works)
+### Refreshing `renv.lock` (working machine only)
 
 ```bash
 Rscript scripts/setup_renv.R
 ```
 
-Then commit the updated `renv.lock` so the next PC can `renv::restore()`.
+Commit the updated `renv.lock` so the next PC can `renv::restore()`.
