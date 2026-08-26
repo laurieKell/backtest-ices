@@ -5,6 +5,17 @@
 .Ruserdata
 *.Rproj.user/
 
+# renv
+renv/library/
+renv/staging/
+renv/local/
+renv/cellar/
+renv/lock/
+renv/sandbox/
+renv/python/
+renv/settings.d/
+renv/.gitignore
+
 # Data (downloaded assessments and ICES extracts)
 data/raw/**
 !data/raw/.gitkeep

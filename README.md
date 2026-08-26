@@ -4,42 +4,125 @@ Historical backtest of ICES Category 1 advice for six Northeast Atlantic
 stocks (Irish Sea cod and whiting; Celtic Sea cod, whiting and haddock;
 Northeast Atlantic mackerel).
 
-**Application repo:** case-study data, Operating Model conditioning, knitted
-notebooks, and contract deliverables.  
-**Generic engine:** [FLBacktest](https://github.com/laurieKell/FLBacktest)
-(`hcrICES`, `fwdFbar`, `ltermEq`, `project_hcr`, `openloop_start`, …).  
-**Sibling app** (same engine, different question):
-[BIM-Resilience](https://github.com/laurieKell/BIM-Resilience).
+| | |
+|--|--|
+| **Repo** | https://github.com/laurieKell/blueMarine (private) |
+| **Shared FLR engine** | [FLBacktest](https://github.com/laurieKell/FLBacktest) |
+| **Sibling app** | [BIM-Resilience](https://github.com/laurieKell/BIM-Resilience) |
 
-## Quick start
+This README is the checklist for **installing and re-running on a new PC**.
+
+---
+
+## 0. Prerequisites
+
+| Need | Notes |
+|------|--------|
+| **R** | **4.4.x recommended** (matches `renv.lock`) |
+| **Git** | SSH or HTTPS access to this **private** repo and to `laurieKell/FLBacktest` |
+| **Rtools** (Windows) | Needed to compile FLR packages if binaries are missing |
+| **Network** | CRAN + GitHub (`flr/*`, `laurieKell/FLBacktest`) |
+| **Optional** | XeLaTeX + Imperial fonts under `tex/imperial/Fonts/` — only for PDF / Beamer |
+
+---
+
+## 1. Clone
 
 ```bash
-# Install FLR stack (once)
-Rscript -e "remotes::install_github('laurieKell/FLBacktest')"
-# Also need FLCore, FLBRP, FLasher, ggplotFL, icesdata (FLR / flr org)
+git clone git@github.com:laurieKell/blueMarine.git
+cd blueMarine
+```
 
-# Knit the analysis chain (default starts at OM conditioning)
-Rscript scripts/run_pipeline.R
+HTTPS (with a credential helper that can read private repos):
 
-# Full chain including screening
-Rscript scripts/run_pipeline.R --all
+```bash
+git clone https://github.com/laurieKell/blueMarine.git
+cd blueMarine
+```
 
-# One step
-Rscript scripts/run_pipeline.R --only gate
+Open the project at this folder (the one with `README.md` / `renv.lock`).
+
+---
+
+## 2. Install R packages (renv)
+
+From the **project root**:
+
+```bash
+Rscript -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+Rscript -e "renv::restore()"
+```
+
+Or in R:
+
+```r
+install.packages("renv", repos = "https://cloud.r-project.org")
+renv::restore()
+```
+
+`renv::restore()` installs everything in `renv.lock` (CRAN + GitHub FLR packages,
+including FLBacktest). First restore can take a long time.
+
+### If restore fails
+
+Install the FLR stack by hand, then retry:
+
+```r
+install.packages(c("remotes", "devtools"), repos = "https://cloud.r-project.org")
+remotes::install_github(c(
+  "flr/FLCore@devel", "flr/FLBRP", "flr/FLasher", "flr/ggplotFL",
+  "flr/icesdata", "flr/FLRebuild",
+  "laurieKell/FLBacktest"
+))
+# then:
+renv::restore()
+```
+
+---
+
+## 3. Smoke test
+
+From the **project root**:
+
+```bash
 Rscript scripts/run_pipeline.R --list
 ```
 
-Compile LaTeX from `tex/` with **XeLaTeX** (Imperial Sans fonts under
-`tex/imperial/Fonts/`):
+In R:
 
-```bash
-cd tex
-xelatex paper.tex && bibtex paper && xelatex paper.tex && xelatex paper.tex
-xelatex exec_summary.tex
-xelatex beamer.tex
+```r
+source("R/paths.R")
+bm_root()                              # should print this clone’s path
+file.exists(file.path(bm_root(), "data/reference/stocks.csv"))
+file.exists(file.path(bm_root(), "data/om/oms.RData"))
+library(FLBacktest)
+library(icesdata)
 ```
 
-## Pipeline
+If `bm_root()` fails, set the working directory to the repo root (or knit from `Rmd/`).
+
+---
+
+## 4. Re-run the analysis
+
+`data/results/` is **gitignored** — you must knit (or run the pipeline) to rebuild it.
+`data/WGCSE/` and `data/om/` are in the repo so you can start from OM conditioning
+or from the gate without re-downloading assessments.
+
+### Full pipeline (recommended)
+
+```bash
+# Default: OM → gate → open/closed loop → rebuild → digest → cases → report
+Rscript scripts/run_pipeline.R
+
+# Include screening from the start
+Rscript scripts/run_pipeline.R --all
+
+# One step or from a named step
+Rscript scripts/run_pipeline.R --only gate
+Rscript scripts/run_pipeline.R --from closed
+Rscript scripts/run_pipeline.R --list
+```
 
 | Step | Notebook | Writes |
 |------|----------|--------|
@@ -54,47 +137,70 @@ xelatex beamer.tex
 | generic | `06.2_generic.Rmd` | remaining stocks (scn2) |
 | report | `06.0_report.Rmd` | contract figures (loads results only) |
 
-Knit order and notes: [`Rmd/README.md`](Rmd/README.md). Supplement index:
-[`Rmd/00_supplement.Rmd`](Rmd/00_supplement.Rmd).  
 `04.*` **stops** if the long-term OM gate fails (`require_om_gate()`).
 
-## Layout
+Knit order and notes: [`Rmd/README.md`](Rmd/README.md).  
+Supplement index: [`Rmd/00_supplement.Rmd`](Rmd/00_supplement.Rmd).
 
-```
-blueMarine/
-├── data/
-│   ├── reference/     # stocks.csv (canonical list)
-│   ├── WGCSE/         # FLStock inputs
-│   ├── om/            # Conditioned OMs from 02.0
-│   ├── interim/       # Knit checkpoints (gitignored)
-│   └── results/       # Notebook deliverables (gitignored; re-knit)
-├── R/                 # App I/O only (loadStocks, om gate, plot theme)
-├── Rmd/               # Methods notebooks = supplementary material
-├── scripts/           # run_pipeline.R
-├── tex/               # paper, exec_summary, beamer, screening
-└── docs/              # STATUS, DATA, report draft, paper outline
+### Report-only (after results exist)
+
+```bash
+Rscript scripts/run_pipeline.R --only report
 ```
 
-Archival copies live under `backUp/` (not part of the runnable pipeline).
+Or open `Rmd/06.0_report.Rmd` and Knit (working directory = project root or `Rmd/`).
 
-## Deliverables
+---
+
+## 5. Optional — LaTeX PDFs
+
+Needs **XeLaTeX** and fonts under `tex/imperial/Fonts/`:
+
+```bash
+cd tex
+xelatex paper.tex && bibtex paper && xelatex paper.tex && xelatex paper.tex
+xelatex exec_summary.tex
+xelatex beamer.tex
+```
+
+---
+
+## 6. What is / isn’t on GitHub
+
+| On GitHub | Local only (gitignored) |
+|-----------|-------------------------|
+| `data/reference/`, `data/WGCSE/`, `data/om/` | `data/results/`, `data/interim/` |
+| `R/`, `Rmd/`, `scripts/`, `tex/` sources | Knitted `Rmd/*.html`, `Rmd/cache/` |
+| `renv.lock`, docs, advice PDFs under `docs/advice/` | `backUp/` |
+
+---
+
+## 7. Deliverables (after a successful run)
 
 | Item | Location |
 |------|----------|
-| Technical report (HTML) | `Rmd/06.0_report.Rmd` → `06.0_report.html` |
-| Working paper (LaTeX) | `tex/paper.tex` |
+| Contract report (HTML) | `Rmd/06.0_report.html` |
+| Working paper | `tex/paper.tex` → PDF |
 | Executive summary | `tex/exec_summary.tex` |
-| Beamer briefing | `tex/beamer.tex` |
+| Beamer | `tex/beamer.tex` |
 | Supplement | `Rmd/00_supplement.Rmd` + knit chain |
-| Report draft (markdown) | `docs/report_draft.md` |
-| Peer-review outline | `docs/paper_outline.md` |
+| Report draft (markdown) | [`docs/report_draft.md`](docs/report_draft.md) |
+| Peer-review outline | [`docs/paper_outline.md`](docs/paper_outline.md) |
+| Status / data layout | [`docs/STATUS.md`](docs/STATUS.md), [`docs/DATA.md`](docs/DATA.md) |
 
-## Design rule
+---
 
-**Package = generic engine. Application = data, conditioning, narrative.**  
-Do not re-implement `hcrICES` / `ltermEq` / `geom_flpar_lab` here. See
-[`docs/FLR_methods.md`](docs/FLR_methods.md) and
-[`docs/app_vs_package.md`](docs/app_vs_package.md).
+## Design rules (short)
 
-Failed projections stop the notebook (`error = FALSE` in knitr;
-`FLBacktest::backtest(..., tryIt = FALSE)`).
+- **Package = generic engine** ([FLBacktest](https://github.com/laurieKell/FLBacktest)).  
+  **Application = data, conditioning, narrative** — [`docs/app_vs_package.md`](docs/app_vs_package.md).
+- Prefer package generics (`hcrICES`, `ltermEq`, `openloop_start`, `geom_flpar_lab`, …) over local copies — [`docs/FLR_methods.md`](docs/FLR_methods.md).
+- Fail loud: knitr `error = FALSE`; do not wrap `fwd` / `hcrICES` in silent `try()`.
+
+### Refreshing `renv.lock` (on a machine that already works)
+
+```bash
+Rscript scripts/setup_renv.R
+```
+
+Then commit the updated `renv.lock` so the next PC can `renv::restore()`.

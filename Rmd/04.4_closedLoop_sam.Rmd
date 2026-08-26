@@ -44,7 +44,9 @@ Default `nits = 1` is a smoke iteration count. Increase `nits` for a
 stochastic OEM; `indexCv` is 0.1 as in `FLBacktest::backtest`.
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root="C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
+root <- bm_root()
 
 dir.create(file.path(root, "tex/figs"),                          recursive=TRUE, showWarnings=FALSE)
 dir.create(file.path(root, "data/results"),                      recursive=TRUE, showWarnings=FALSE)
@@ -77,8 +79,6 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(FLasher)
   if (requireNamespace("devtools", quietly = TRUE) &&
-      dir.exists("C:/active/flr/backtest"))
-    suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
   else
     library(FLBacktest)
   library(FLfse)
@@ -183,8 +183,6 @@ tryCatch({
     suppressPackageStartupMessages(
       lapply(flr_pkgs, library, character.only = TRUE))
     if (requireNamespace("devtools", quietly = TRUE) &&
-        dir.exists("C:/active/flr/backtest"))
-      suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
     else
       library(FLBacktest)
     NULL

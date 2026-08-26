@@ -16,7 +16,9 @@ output:
 ---
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root  ="C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
+root <- bm_root()
 
 stocks=read.csv(file.path(root,"data/reference/stocks.csv"), stringsAsFactors=FALSE)
 stocks$name=factor(stocks$name, levels=unique(stocks$name))
@@ -62,7 +64,7 @@ theme_set(theme_bluemarine_html())
 ```
 
 ```{r data}
-source("C:/active/blueMarine/R/loadStocks.R")
+source(file.path(root, "R/loadStocks.R"))
 
 oms = FLStocks(dlply(stocks, .(sid), function(x) loadFLStock(x,file.path(root,"data/WGCSE"))))
 oms = FLStocks(llply(oms, cleanStock))

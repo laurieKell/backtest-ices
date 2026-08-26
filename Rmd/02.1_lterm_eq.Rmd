@@ -13,7 +13,8 @@ output:
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
 suppressPackageStartupMessages(suppressWarnings(library(knitr)))
-root <- "C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
 dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(root, "Rmd/cache", "02.1_lterm_eq"), recursive = TRUE, showWarnings = FALSE)

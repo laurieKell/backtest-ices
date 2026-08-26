@@ -23,7 +23,8 @@ produced here; the readable single hypothesis in the generic OM note is
 **scn2** ([`06.2_generic.Rmd`](06.2_generic.Rmd)).
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root="C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
 
 dir.create(file.path(root, "tex/figs"),               recursive=TRUE, showWarnings=FALSE)
 dir.create(file.path(root, "data/results"),           recursive=TRUE, showWarnings=FALSE)
@@ -56,11 +57,7 @@ suppressPackageStartupMessages({
   library(FLBacktest)
   library(FLasher)
   library(openxlsx)
-  if (requireNamespace("devtools", quietly = TRUE) &&
-      dir.exists("C:/active/flr/ggplotFL"))
-    suppressMessages(devtools::load_all("C:/active/flr/ggplotFL", quiet = TRUE))
-  else
-    library(ggplotFL)
+  library(ggplotFL)
 })
 
 source(file.path(root, "R/plot_theme.R"))

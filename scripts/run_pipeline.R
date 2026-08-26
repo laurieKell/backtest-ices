@@ -11,13 +11,15 @@
 
 args <- commandArgs(trailingOnly = TRUE)
 file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-root <- if (length(file_arg)) {
-  normalizePath(file.path(dirname(sub("^--file=", "", file_arg)), ".."))
-} else if (file.exists("Rmd/01_screening.Rmd")) {
-  normalizePath(".")
+script_dir <- if (length(file_arg)) {
+  dirname(normalizePath(sub("^--file=", "", file_arg), winslash = "/"))
+} else if (file.exists("scripts/run_pipeline.R")) {
+  normalizePath("scripts", winslash = "/")
 } else {
-  "C:/active/blueMarine"
+  normalizePath(".", winslash = "/")
 }
+source(file.path(dirname(script_dir), "R", "paths.R"))
+root <- bm_root(start = c(getwd(), dirname(script_dir)))
 
 # Logical pipeline (matches Rmd/README.md)
 steps <- c(

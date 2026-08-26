@@ -51,7 +51,8 @@ For Celtic Sea cod (`cod.27.7e-k`) based on ICES Advice fishing pressure is curr
 
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root = "C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
 
 dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(root, "Rmd/cache", "06.1_TwoStocks"), recursive = TRUE,
@@ -88,9 +89,6 @@ suppressPackageStartupMessages({
   library(FLBacktest)
   library(ggplotFL)
 })
-
-if (!exists("project_hcr", mode = "function"))
-  suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
 
 source(file.path(root, "R/plot_theme.R"))
 source(file.path(root, "R/om.R"))

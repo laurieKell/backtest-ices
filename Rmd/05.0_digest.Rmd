@@ -19,7 +19,9 @@ need a `06.1`-style case study. Do not put SAM, EqSim essays or
 presentation layout here.
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root = "C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
+root <- bm_root()
 suppressPackageStartupMessages(suppressWarnings(library(knitr)))
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       error = FALSE)

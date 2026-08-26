@@ -2,7 +2,7 @@
 # Table 1 layout = MSY / precautionary-approach stock status (not the forecast
 # assumptions table that current sheets number as Table 1).
 
-load_advice_sheets <- function(root = "C:/active/blueMarine") {
+load_advice_sheets <- function(root = bm_root()) {
   f <- file.path(root, "data/reference/advice_sheets.csv")
   if (!file.exists(f))
     stop("Missing ", f, call. = FALSE)

@@ -32,7 +32,9 @@ HCR parameters (`ftar`, `btrig`, `blim`) are ICES values on `eqs`
 (Beverton–Holt with an \(R_0\) prior from the hockey-stick).
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root="C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
+root <- bm_root()
 
 dir.create(file.path(root, "tex/figs"),                  recursive=TRUE, showWarnings=FALSE)
 dir.create(file.path(root, "data/results"),              recursive=TRUE, showWarnings=FALSE)
@@ -67,8 +69,6 @@ suppressPackageStartupMessages({
   library(FLBacktest)
 })
 
-if (!exists("project_hcr", mode = "function"))
-  suppressMessages(devtools::load_all("C:/active/flr/backtest", quiet = TRUE))
 
 source(file.path(root, "R/plot_theme.R"))
 theme_set(theme_bluemarine_html())

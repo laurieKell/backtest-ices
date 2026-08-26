@@ -24,7 +24,8 @@ The detailed 50-year trajectories are in
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
 suppressPackageStartupMessages(suppressWarnings(library(knitr)))
-root <- "C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
 dir.create(file.path(root, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(root, "data/interim/03.0_om"), recursive = TRUE, showWarnings = FALSE)

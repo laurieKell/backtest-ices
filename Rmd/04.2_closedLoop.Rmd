@@ -36,7 +36,9 @@ stock–recruitment. Historical projections keep the assessment's year-specific
 that actually occurred is held common across policies.
 
 ```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
-root="C:/active/blueMarine"
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- bm_root()
+root <- bm_root()
 
 dir.create(file.path(root, "tex/figs"),                     recursive=TRUE, showWarnings=FALSE)
 dir.create(file.path(root, "data/results"),                 recursive=TRUE, showWarnings=FALSE)
