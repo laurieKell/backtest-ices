@@ -95,6 +95,9 @@ source("R/paths.R")
 bm_root()                              # should print this clone’s path
 file.exists(file.path(bm_root(), "data/reference/stocks.csv"))
 file.exists(file.path(bm_root(), "data/WGCSE/cod.27.7a.RData"))
+file.exists(file.path(bm_root(), "data/WGCSE/mac.27.nea.RData"))
+# After: Rscript scripts/build_flstock_from_sam.R
+file.exists(file.path(bm_root(), "data/WGCSE/had.27.7b-k.RData"))
 library(FLBacktest)
 library(icesdata)
 ```
@@ -105,13 +108,16 @@ If `bm_root()` fails, set the working directory to the repo root (or knit from `
 
 ## 4. Re-run the analysis
 
-Committed inputs are `data/reference/` and `data/WGCSE/*.RData` (FLStocks).  
-`data/om/`, `data/results/`, `data/interim/`, and `data/WGCSE/sam/` are **gitignored**.
+Committed inputs are `data/reference/` plus non-SAM FLStocks  
+(`data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData`).  
+`data/om/`, `data/results/`, `data/interim/`, `data/WGCSE/sam/`, and the four  
+SAM-derived FLStocks are **gitignored**.
 
 ### Rebuild SAM FLStocks from stockassessment.org
 
-Four stocks have a `sam_web` key in `data/reference/stocks.csv`. To (re)create their
-`data/WGCSE/*.RData` from [stockassessment.org](https://www.stockassessment.org):
+Four stocks have a `sam_web` key in `data/reference/stocks.csv`. On a new machine,
+build their `data/WGCSE/*.RData` before running the pipeline
+([stockassessment.org](https://www.stockassessment.org)):
 
 ```bash
 # Needs packages: stockassessment, FLfse, FLCore
@@ -120,7 +126,7 @@ Rscript scripts/build_flstock_from_sam.R
 Rscript scripts/build_flstock_from_sam.R --sid had.27.7b-k --cache-fit
 ```
 
-Irish Sea cod and NEA mackerel are not SAM — keep those FLStocks as committed inputs.
+Irish Sea cod and NEA mackerel are not SAM — those FLStocks stay in the repo.
 
 ### Full pipeline (recommended)
 
@@ -182,7 +188,7 @@ xelatex beamer.tex
 
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
-| `data/reference/`, `data/WGCSE/*.RData` (FLStock inputs) | `data/om/`, `data/results/`, `data/interim/`, `data/raw/`, `data/WGCSE/sam/` |
+| `data/reference/`, `data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData` | `data/om/`, `data/results/`, `data/interim/`, `data/raw/`, `data/WGCSE/sam/`, SAM FLStocks |
 | `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `scripts/build_flstock_from_sam.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
 | `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
 | | `R/_local/`, `scripts/_local/`, `backUp/` |

@@ -31,6 +31,11 @@ data/sdGraphs/**
 data/WGCSE/cod.27.7e-k-2025.RData
 # Cached stockassessment.org fits (rebuild FLStocks with scripts/build_flstock_from_sam.R)
 data/WGCSE/sam/
+# SAM-derived FLStocks (rebuild with scripts/build_flstock_from_sam.R)
+data/WGCSE/whg.27.7a.RData
+data/WGCSE/cod.27.7e-k.RData
+data/WGCSE/whg.27.7b-ce-k.RData
+data/WGCSE/had.27.7b-k.RData
 
 # Knitr / R Markdown artefacts
 Rmd/cache/
