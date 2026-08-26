@@ -2,7 +2,18 @@
 
 **Phase:** finalisation — reproducible repo, package generics, deliverables.
 
-**Last updated:** 25 August 2026.
+**Last updated:** 26 August 2026.
+
+## Runtime
+
+| Item | Value |
+|------|--------|
+| **R** | **4.6.1** (`renv.lock`) |
+| **Rtools** | Rtools45 |
+| **Project library** | `renv/library/windows/R-4.6/x86_64-w64-mingw32` |
+| **FLRebuild** | **0.2.1** from GitHub [`flr/FLRebuild`](https://github.com/flr/FLRebuild) (`1f90562`) |
+
+In RStudio: **Tools → Global Options → R version →** point at `R-4.6.1`, then restart in this project. System PATH may still prefer an older R; use the 4.6.1 `Rscript` path or update PATH when running from a terminal.
 
 ## Workplan mapping
 

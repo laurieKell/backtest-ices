@@ -18,9 +18,9 @@ This README is the checklist for **installing and re-running on a new PC**.
 
 | Need | Notes |
 |------|--------|
-| **R** | **4.4.x recommended** (matches `renv.lock`) |
+| **R** | **4.6.1** (matches `renv.lock`; project library under `renv/library/.../R-4.6/`) |
 | **Git** | SSH or HTTPS access to this **private** repo and to `laurieKell/FLBacktest` |
-| **Rtools** (Windows) | Needed to compile FLR packages if binaries are missing |
+| **Rtools** (Windows) | **Rtools45** (works with R 4.6.x) to compile FLR / TMB packages |
 | **Network** | CRAN + GitHub (`flr/*`, `laurieKell/FLBacktest`) |
 | **Optional** | XeLaTeX + Imperial fonts under `tex/imperial/Fonts/` — only for PDF / Beamer |
 
