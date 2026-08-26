@@ -68,6 +68,7 @@ docs/
 R/_local/
 scripts/_local/
 scripts/*.log
+*.code-workspace
 
 # OS
 .DS_Store
