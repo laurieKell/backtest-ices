@@ -105,8 +105,22 @@ If `bm_root()` fails, set the working directory to the repo root (or knit from `
 
 ## 4. Re-run the analysis
 
-Committed inputs are `data/reference/` and `data/WGCSE/` only.  
-`data/om/`, `data/results/`, and `data/interim/` are **gitignored** — rebuild them with the pipeline (start at `om`).
+Committed inputs are `data/reference/` and `data/WGCSE/*.RData` (FLStocks).  
+`data/om/`, `data/results/`, `data/interim/`, and `data/WGCSE/sam/` are **gitignored**.
+
+### Rebuild SAM FLStocks from stockassessment.org
+
+Four stocks have a `sam_web` key in `data/reference/stocks.csv`. To (re)create their
+`data/WGCSE/*.RData` from [stockassessment.org](https://www.stockassessment.org):
+
+```bash
+# Needs packages: stockassessment, FLfse, FLCore
+Rscript scripts/build_flstock_from_sam.R
+# Optional: one stock, and/or cache the raw fit under data/WGCSE/sam/
+Rscript scripts/build_flstock_from_sam.R --sid had.27.7b-k --cache-fit
+```
+
+Irish Sea cod and NEA mackerel are not SAM — keep those FLStocks as committed inputs.
 
 ### Full pipeline (recommended)
 
@@ -168,8 +182,8 @@ xelatex beamer.tex
 
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
-| `data/reference/`, `data/WGCSE/` (pipeline inputs) | `data/om/`, `data/results/`, `data/interim/`, `data/raw/` |
-| `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
+| `data/reference/`, `data/WGCSE/*.RData` (FLStock inputs) | `data/om/`, `data/results/`, `data/interim/`, `data/raw/`, `data/WGCSE/sam/` |
+| `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `scripts/build_flstock_from_sam.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
 | `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
 | | `R/_local/`, `scripts/_local/`, `backUp/` |
 

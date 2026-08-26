@@ -1,7 +1,7 @@
-name,sid,ices_area,assessment,advice_basis,candidate,rdata,object,end
-Irish Sea cod,cod.27.7a,7.a,Age-structured analytical,ICES MSY approach,TRUE,cod.27.7a.RData,cod.27.7a,2023
-Irish Sea whiting,whg.27.7a,7.a,SAM age-structured,ICES MSY approach,TRUE,whg.27.7a.RData,whg.27.7a,2023
-Celtic Sea cod,cod.27.7e-k,7.e-k,SAM age-structured,ICES MSY approach,TRUE,cod.27.7e-k.RData,cod.27.7ek,2025
-Celtic Sea whiting,whg.27.7b-ce-k,7.b-c;7.e-k,SAM age-structured,ICES MSY approach,TRUE,whg.27.7b-ce-k.RData,whg.27.7bcek,2024
-Celtic Sea haddock,had.27.7b-k,7.b-k,SAM age-structured,ICES MSY approach,TRUE,had.27.7b-k.RData,had.27.7bk,2025
-NE Atlantic mackerel,mac.27.nea,1-8;14;9.a,Integrated age-structured,MSY rule (Coastal States),TRUE,mac.27.nea.RData,mac.27.nea,2024
+name,sid,ices_area,assessment,advice_basis,candidate,rdata,object,end,sam_web
+Irish Sea cod,cod.27.7a,7.a,Age-structured analytical,ICES MSY approach,TRUE,cod.27.7a.RData,cod.27.7a,2023,
+Irish Sea whiting,whg.27.7a,7.a,SAM age-structured,ICES MSY approach,TRUE,whg.27.7a.RData,whg.27.7a,2023,whg.27.7a_WKBNSCS_final
+Celtic Sea cod,cod.27.7e-k,7.e-k,SAM age-structured,ICES MSY approach,TRUE,cod.27.7e-k.RData,cod.27.7ek,2025,Cod_CS_WG2026
+Celtic Sea whiting,whg.27.7b-ce-k,7.b-c;7.e-k,SAM age-structured,ICES MSY approach,TRUE,whg.27.7b-ce-k.RData,whg.27.7bcek,2024,whg.7b-ce-k_WGCSE25_advice
+Celtic Sea haddock,had.27.7b-k,7.b-k,SAM age-structured,ICES MSY approach,TRUE,had.27.7b-k.RData,had.27.7bk,2025,HAD7bk_2026
+NE Atlantic mackerel,mac.27.nea,1-8;14;9.a,Integrated age-structured,MSY rule (Coastal States),TRUE,mac.27.nea.RData,mac.27.nea,2024,

@@ -29,6 +29,8 @@ data/om/**
 data/sdGraphs/**
 # Alternate / non-inventory FLStock dumps (keep local if useful)
 data/WGCSE/cod.27.7e-k-2025.RData
+# Cached stockassessment.org fits (rebuild FLStocks with scripts/build_flstock_from_sam.R)
+data/WGCSE/sam/
 
 # Knitr / R Markdown artefacts
 Rmd/cache/
