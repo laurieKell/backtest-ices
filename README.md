@@ -1,4 +1,4 @@
-# blueMarine
+# backtest-ices
 
 Historical backtest of ICES Category 1 advice for six Northeast Atlantic
 stocks (Irish Sea cod and whiting; Celtic Sea cod, whiting and haddock;
@@ -6,11 +6,11 @@ Northeast Atlantic mackerel).
 
 | | |
 |--|--|
-| **Repo** | https://github.com/laurieKell/blueMarine (private) |
+| **Repo** | https://github.com/laurieKell/backtest-ices |
 | **Shared FLR engine** | [FLBacktest](https://github.com/laurieKell/FLBacktest) |
 | **Sibling app** | [BIM-Resilience](https://github.com/laurieKell/BIM-Resilience) |
 
-This README is the checklist for **installing and re-running on a new PC**.
+Formerly *blueMarine*. This README is the checklist for **installing and re-running on a new PC**.
 
 ---
 
@@ -19,7 +19,7 @@ This README is the checklist for **installing and re-running on a new PC**.
 | Need | Notes |
 |------|--------|
 | **R** | **4.6.1** (matches `renv.lock`; project library under `renv/library/.../R-4.6/`) |
-| **Git** | SSH or HTTPS access to this **private** repo and to `laurieKell/FLBacktest` |
+| **Git** | SSH or HTTPS access to this repo and to `laurieKell/FLBacktest` |
 | **Rtools** (Windows) | **Rtools45** (works with R 4.6.x) to compile FLR / TMB packages |
 | **Network** | CRAN + GitHub (`flr/*`, `laurieKell/FLBacktest`) |
 | **Optional** | XeLaTeX + Imperial fonts under `tex/imperial/Fonts/` — only for PDF / Beamer |
@@ -29,15 +29,15 @@ This README is the checklist for **installing and re-running on a new PC**.
 ## 1. Clone
 
 ```bash
-git clone git@github.com:laurieKell/blueMarine.git
-cd blueMarine
+git clone git@github.com:laurieKell/backtest-ices.git
+cd backtest-ices
 ```
 
-HTTPS (with a credential helper that can read private repos):
+HTTPS:
 
 ```bash
-git clone https://github.com/laurieKell/blueMarine.git
-cd blueMarine
+git clone https://github.com/laurieKell/backtest-ices.git
+cd backtest-ices
 ```
 
 Open the project at this folder (the one with `README.md` / `renv.lock`).

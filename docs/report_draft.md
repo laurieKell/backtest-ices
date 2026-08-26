@@ -2,7 +2,7 @@
 
 Draft report for Laurence Kell / blueMarine. Lift into `Rmd/06.0_report.Rmd`.
 **Freeze:** 25 August 2026. Repositories:
-[blueMarine](https://github.com/laurieKell/blueMarine) (application) and
+[backtest-ices](https://github.com/laurieKell/backtest-ices) (application) and
 [FLBacktest](https://github.com/laurieKell/FLBacktest) (engine).
 Bibliography: `tex/refs.bib` (Pandoc keys `winker2026rebuilding`,
 `winker2025precautionary`, `Lindmark2026productivity`, `mesnil2010hockeystick`

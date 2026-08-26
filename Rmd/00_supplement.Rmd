@@ -135,6 +135,6 @@ Application-only: `R/plot_theme.R`, `data/reference/stocks.csv`,
 `R/loadStocks.R`, `R/om.R` (`load_om`, `require_om_gate`), `R/advice_sheets.R`.
 See [`docs/FLR_methods.md`](../docs/FLR_methods.md).
 
-Code: [github.com/laurieKell/blueMarine](https://github.com/laurieKell/blueMarine);
+Code: [github.com/laurieKell/backtest-ices](https://github.com/laurieKell/backtest-ices);
 engine: [github.com/laurieKell/FLBacktest](https://github.com/laurieKell/FLBacktest).
 Pipeline: `Rscript scripts/run_pipeline.R`.
