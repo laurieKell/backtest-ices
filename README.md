@@ -188,7 +188,7 @@ xelatex beamer.tex
 
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
-| `data/reference/`, `data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData` | `data/om/`, `data/results/`, `data/interim/`, `data/raw/`, `data/WGCSE/sam/`, SAM FLStocks |
+| `data/reference/`, `data/WGCSE/cod.27.7a.RData`, `data/WGCSE/mac.27.nea.RData` | `data/om/`, `data/results/`, `data/interim/`, `data/sdGraphs/`, `data/WGCSE/sam/`, SAM FLStocks |
 | `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `scripts/build_flstock_from_sam.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
 | `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
 | | `R/_local/`, `scripts/_local/`, `backUp/` |

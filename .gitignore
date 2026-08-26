@@ -17,16 +17,12 @@ renv/settings.d/
 renv/.gitignore
 
 # Data — keep only pipeline *inputs* on GitHub
-# (reference inventory + WGCSE FLStock/SAM assessments)
-data/raw/**
-!data/raw/.gitkeep
-data/interim/**
-!data/interim/.gitkeep
-data/results/**
-!data/results/.gitkeep
-data/om/**
-!data/om/.gitkeep
-data/sdGraphs/**
+# (reference/ + WGCSE non-SAM FLStocks). Everything else is local/generated.
+data/raw/
+data/interim/
+data/results/
+data/om/
+data/sdGraphs/
 # Alternate / non-inventory FLStock dumps (keep local if useful)
 data/WGCSE/cod.27.7e-k-2025.RData
 # Cached stockassessment.org fits (rebuild FLStocks with scripts/build_flstock_from_sam.R)
