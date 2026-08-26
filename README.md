@@ -171,7 +171,8 @@ xelatex beamer.tex
 |-----------|-------------------------|
 | `data/reference/`, `data/WGCSE/`, `data/om/` | `data/results/`, `data/interim/` |
 | `R/`, `Rmd/`, `scripts/`, `tex/` sources | Knitted `Rmd/*.html`, `Rmd/cache/` |
-| `renv.lock`, docs, advice PDFs under `docs/advice/` | `backUp/` |
+| `renv.lock` | `docs/` (status notes, drafts, advice PDFs, literature) |
+| | `backUp/` |
 
 ---
 
@@ -184,17 +185,16 @@ xelatex beamer.tex
 | Executive summary | `tex/exec_summary.tex` |
 | Beamer | `tex/beamer.tex` |
 | Supplement | `Rmd/00_supplement.Rmd` + knit chain |
-| Report draft (markdown) | [`docs/report_draft.md`](docs/report_draft.md) |
-| Peer-review outline | [`docs/paper_outline.md`](docs/paper_outline.md) |
-| Status / data layout | [`docs/STATUS.md`](docs/STATUS.md), [`docs/DATA.md`](docs/DATA.md) |
+
+Draft markdown / status notes under local `docs/` are not published with the repo.
 
 ---
 
 ## Design rules (short)
 
 - **Package = generic engine** ([FLBacktest](https://github.com/laurieKell/FLBacktest)).  
-  **Application = data, conditioning, narrative** — [`docs/app_vs_package.md`](docs/app_vs_package.md).
-- Prefer package generics (`hcrICES`, `ltermEq`, `openloop_start`, `geom_flpar_lab`, …) over local copies — [`docs/FLR_methods.md`](docs/FLR_methods.md).
+  **Application = data, conditioning, narrative** (this repo).
+- Prefer package generics (`hcrICES`, `ltermEq`, `openloop_start`, `geom_flpar_lab`, …) over local copies.
 - Fail loud: knitr `error = FALSE`; do not wrap `fwd` / `hcrICES` in silent `try()`.
 
 ### Refreshing `renv.lock` (on a machine that already works)
