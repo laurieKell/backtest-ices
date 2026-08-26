@@ -27,6 +27,8 @@ data/results/**
 data/om/**
 !data/om/.gitkeep
 data/sdGraphs/**
+# Alternate / non-inventory FLStock dumps (keep local if useful)
+data/WGCSE/cod.27.7e-k-2025.RData
 
 # Knitr / R Markdown artefacts
 Rmd/cache/
