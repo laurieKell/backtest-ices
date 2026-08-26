@@ -22,7 +22,7 @@ Formerly *blueMarine*. This README is the checklist for **installing and re-runn
 | **Git** | SSH or HTTPS access to this repo and to `laurieKell/FLBacktest` |
 | **Rtools** (Windows) | **Rtools45** (works with R 4.6.x) to compile FLR / TMB packages |
 | **Network** | CRAN + GitHub (`flr/*`, `laurieKell/FLBacktest`) |
-| **Optional** | XeLaTeX + Imperial fonts under `tex/imperial/Fonts/` — only for PDF / Beamer |
+| **Optional** | XeLaTeX — only if you build PDFs from local `tex/` sources |
 
 ---
 
@@ -170,9 +170,9 @@ xelatex beamer.tex
 | On GitHub | Local only (gitignored) |
 |-----------|-------------------------|
 | `data/reference/`, `data/WGCSE/`, `data/om/` | `data/results/`, `data/interim/` |
-| `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R`, `tex/` | Knitted `Rmd/*.html`, `Rmd/cache/` |
-| `renv.lock` | `docs/`, `R/_local/`, `scripts/_local/` (drafts, one-shot migrate helpers) |
-| | `backUp/` |
+| `R/`, `Rmd/`, `scripts/run_pipeline.R`, `scripts/setup_renv.R` | Knitted `Rmd/*.html`, `Rmd/cache/` |
+| `renv.lock` | `docs/`, `tex/` (LaTeX sources, fonts, figures, PDFs) |
+| | `R/_local/`, `scripts/_local/`, `backUp/` |
 
 ---
 
@@ -181,12 +181,10 @@ xelatex beamer.tex
 | Item | Location |
 |------|----------|
 | Contract report (HTML) | `Rmd/06.0_report.html` |
-| Working paper | `tex/paper.tex` → PDF |
-| Executive summary | `tex/exec_summary.tex` |
-| Beamer | `tex/beamer.tex` |
 | Supplement | `Rmd/00_supplement.Rmd` + knit chain |
+| Working paper / exec summary / Beamer | local `tex/` (not on GitHub) |
 
-Draft markdown / status notes under local `docs/` are not published with the repo.
+Draft markdown under local `docs/` and LaTeX under local `tex/` are not published with the repo.
 
 ---
 

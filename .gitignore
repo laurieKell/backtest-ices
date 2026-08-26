@@ -65,6 +65,7 @@ blueMarine.lnk
 Pictures/
 R/data/
 docs/
+tex/
 R/_local/
 scripts/_local/
 scripts/*.log
