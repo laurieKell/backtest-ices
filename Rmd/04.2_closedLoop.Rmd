@@ -30,7 +30,11 @@ open-loop \(F_{\mathrm{target}}\) trajectory.
 | `M` | as `srr`, plus autocorrelated \(M\) on 100 iterations | `srResiduals(eq)` |
 
 ICES \(F_{\mathrm{tar}}\) / \(B_{\mathrm{trigger}}\) / \(B_{\lim}\) are held
-fixed (`hcrParams` from `eqs`). Each SRR supplies its own biology /
+fixed (`hcrParams` from `eqs`). The advised catch carries the ICES TAC
+stability clause (`R/om.R::hcr_tac_bounds`): year-on-year change limited to
+\(\pm 20\%\) of the previous catch when SSB is at or above
+\(MSYB_{\mathrm{trigger}}\), and unconstrained below it
+(`hcrICES(bndTac, bndWhen = "btrig")`). Each SRR supplies its own biology /
 stock–recruitment. Historical projections keep the assessment's year-specific
 \(M\), mass and maturity and replay recruitment residuals, so the productivity
 that actually occurred is held common across policies.
@@ -99,6 +103,9 @@ require_om_gate(root, sids)
 srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
 startYr = setNames(rep(2015, length(sids)), sids)
 endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+# TAC stability clause (R/om.R): +/-20% year-on-year when SSB >= MSY Btrigger
+bndTac  = hcr_tac_bounds()
+bndWhen = hcr_tac_bnd_when()
 ```
 
 # Closed-loop `hcrICES`
@@ -114,7 +121,8 @@ cl = makeCluster(ncores)
 registerDoParallel(cl)
 tryCatch({
   clusterExport(cl, c("flr_pkgs", "om", "eqls", "eqs", "srDev",
-                      "startYr", "endYr"), envir = environment())
+                      "startYr", "endYr", "bndTac", "bndWhen"),
+                envir = environment())
   clusterEvalQ(cl, {
     suppressPackageStartupMessages(
       lapply(flr_pkgs, library, character.only = TRUE))
@@ -126,17 +134,19 @@ tryCatch({
     scen2[[nm]] = FLStocks(foreach(id = sids,
                                    .packages = flr_pkgs,
                                    .export = c("om", "eqls", "eqs", "srDev",
-                                               "startYr", "endYr", "nm")) %dopar% {
+                                               "startYr", "endYr", "nm",
+                                               "bndTac", "bndWhen")) %dopar% {
       hcrICES(om[[id]], eql = eqls[[nm]][[id]],
               sr_deviances = srDev[[nm]][[id]],
               params = hcrParams(eqs[[id]]),
               start = startYr[id], end = endYr[id],
-              err = NULL, implErr = 0)[[1]]
+              err = NULL, implErr = 0,
+              bndTac = bndTac, bndWhen = bndWhen)[[1]]
     })
     names(scen2[[nm]]) = sids
   }
 }, finally = stopCluster(cl))
-closedLoop = list("SRR" = scen2)
+closedLoop = list("SRR" = scen2, bndTac = bndTac, bndWhen = bndWhen)
 
 save(closedLoop, file=file.path(root, "data/results/03.2_closedLoop.RData"))
 ```

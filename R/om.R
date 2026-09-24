@@ -21,3 +21,11 @@ openloop_start <- function(stk, target = 1990L) {
 require_om_gate <- function(root = "C:/active/blueMarine", sids = NULL) {
   .load_flbacktest_fn("require_om_gate")(root = root, sids = sids)
 }
+
+# Advice-rule TAC stability clause, as used in ICES advice under management
+# strategies: year-on-year TAC change limited to [lower, upper] of the previous
+# catch, applied only when SSB is at or above MSY Btrigger (bndWhen = "btrig";
+# no constraint below the trigger). Shared by 04.2_closedLoop and 04.3_rebuild
+# via hcrICES(bndTac =, bndWhen =).
+hcr_tac_bounds <- function() c(0.8, 1.2)
+hcr_tac_bnd_when <- function() "btrig"
