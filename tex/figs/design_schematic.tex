@@ -1,0 +1,57 @@
+% Design schematic for the historical closed-loop backtest
+% (OM -- three arms -- score). Self-contained TikZ;
+% requires \usepackage{tikz} and \usetikzlibrary{arrows.meta,positioning,calc}.
+\begin{tikzpicture}[
+  font=\footnotesize,
+  >=Stealth,
+  box/.style={
+    draw, thick, rounded corners=1.5pt,
+    align=center, inner sep=4pt
+  },
+  wide/.style={box, text width=0.92\linewidth},
+  arm/.style={box, text width=0.26\linewidth, minimum height=1.7cm},
+  armdash/.style={arm, densely dashed, thin},
+  arr/.style={->, thick}
+]
+  % Operating model
+  \node[wide] (om) {%
+    \textbf{Operating model (OM)}\\[0.15em]
+    Assessment-conditioned; productivity fixed};
+
+  % Three contrast arms in a matrix (guaranteed equal gap, no overlap)
+  \matrix[
+    below=1.15cm of om,
+    column sep=0.06\linewidth,
+    ampersand replacement=\&
+  ] (arms) {
+    \node[arm] (hist) {%
+      \textbf{Historical}\\[0.15em]
+      Realised $F$}; \&
+    \node[arm] (advice) {%
+      \textbf{Advice rule}\\[0.15em]
+      Closed-loop HCR\\
+      on true OM SSB}; \&
+    \node[armdash] (open) {%
+      \textbf{Open-loop}\\[0.15em]
+      Published ICES $\Fmsy$\\
+      ($=\Ftar$); no feedback}; \\
+  };
+
+  \coordinate (fork) at ($(om.south)!0.5!(arms.north)$);
+  \draw[thick] (om.south) -- (fork);
+  \draw[arr] (fork) -| (hist.north);
+  \draw[arr] (fork) -- (advice.north);
+  \draw[arr, densely dashed, thin] (fork) -| (open.north);
+
+  % Dual scoring
+  \node[wide, below=1.15cm of arms] (score) {%
+    \textbf{Score}\\[0.15em]
+    ICES control points vs.\ OM $\Fmsy$/$\Bmsy$};
+
+  \coordinate (join) at ($(arms.south)!0.5!(score.north)$);
+  \draw[arr] (hist.south) |- (join);
+  \draw[arr] (advice.south) -- (join);
+  \draw[arr, densely dashed, thin] (open.south) |- (join);
+  \draw[arr] (join) -- (score.north);
+
+\end{tikzpicture}
