@@ -1,0 +1,40 @@
+---
+title: "Supplementary methods notebooks"
+subtitle: "Clean-tree index"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      error = FALSE)
+```
+
+This supplement **is** the notebooks in this folder. Funder figures:
+[`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd) and
+`scripts/main_traj_facet.R`. Shared engine: **FLBacktest**.
+
+| Notebook | Role |
+|----------|------|
+| [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd) | Operating Models |
+| [`01.1_lterm_eq.Rmd`](01.1_lterm_eq.Rmd) | Long-term \(F_{\mathrm{MSY}}\) gate |
+| [`01.2_dynamics.Rmd`](01.2_dynamics.Rmd) | Dynamics diagnostics |
+| [`02.1_openLoop.Rmd`](02.1_openLoop.Rmd) | Open loop (ICES \(F_{\mathrm{tar}}\) and OM \(F_{\mathrm{MSY}}\)) |
+| [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd) | Closed-loop `hcrICES` (perfect; **bh3**) |
+| [`02.3_closedLoop_shortcut.Rmd`](02.3_closedLoop_shortcut.Rmd) | Short-cut OEM (`eqSimErr`) |
+| [`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd) | SAM OEM, then SAM closed loop |
+| [`02.5_rebuild.Rmd`](02.5_rebuild.Rmd) | 20-year Future |
+| [`03.0_digest.Rmd`](03.0_digest.Rmd) | All-stock table |
+| [`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd) | Funder figures |
+| [`04.1_multiSRR_review.Rmd`](04.1_multiSRR_review.Rmd) | Peer-review SRRs |
+
+Not here: screening, TwoStocks, generic scn2, parent `06.0_report.Rmd`.
+Short-cut and SAM are off the funder knit:
+`Rscript scripts/run_pipeline.R --only shortcut` and `--only sam`.
+SAM stages via `BM_SAM_STAGE`: `fit`, then `loop`, then `srr`.
+Closed-loop multi-SRR: `BM_CLOSED_SRR=all`.

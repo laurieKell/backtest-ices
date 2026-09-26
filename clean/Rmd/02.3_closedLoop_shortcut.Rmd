@@ -1,0 +1,180 @@
+---
+title: "Closed-loop short-cut OEM"
+subtitle: "Methods — hcrICES with EqSim-style assessment error, between perfect and SAM"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+Same historical closed-loop ICES HCR as
+[`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd) (perfect information), but with a
+**short-cut** observation-error model: multiplicative SSB assessment error from
+`FLBacktest::eqSimErr`. Full SAM assessment OEM is
+[`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).
+
+Default Operating Model SRR is **bh3** (`BM_CLOSED_SRR`, same as `02.2`).
+HCR parameters stay on `eqs` (`eqls[["bh1"]]`). TAC stability clause matches
+`02.2`. This notebook is off the default funder knit
+(`Rscript scripts/run_pipeline.R --only shortcut`).
+
+| Control | Env var | Default |
+|---------|---------|---------|
+| SRR(s) | `BM_CLOSED_SRR` | `bh3` (`all` → six) |
+| \(\sigma\) (log SSB) | `BM_SHORTCUT_SIGMA` | `0.2` |
+| \(\rho\) (lag-1) | `BM_SHORTCUT_RHO` | `0` (uncorrelated SSB) |
+| Iterations | `BM_SHORTCUT_NITS` | `100` |
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"),                              recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                          recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.3_closedLoop_shortcut"), recursive=TRUE, showWarnings=FALSE)
+
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.3_closedLoop_shortcut/"),
+  fig.path  = file.path(here, "tex/figs", "02.3_closedLoop_shortcut-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(FLasher)
+  library(FLBacktest)
+  library(doParallel)
+  library(parallel)
+  library(foreach)})
+
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+
+sids = as.character(stocks$sid)
+om   = oms
+if (!exists("eqs")) {
+  if (!"bh1" %in% names(eqls))
+    stop("eqs missing and eqls[['bh1']] not found — knit 01.0 first.",
+         call. = FALSE)
+  eqs = eqls[["bh1"]]
+}
+require_om_gate(root, sids)
+
+srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
+startYr = setNames(rep(2015L, length(sids)), sids)
+endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+bndTac  = hcr_tac_bounds()
+bndWhen = hcr_tac_bnd_when()
+
+srr6 = c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3")
+srr_env = Sys.getenv("BM_CLOSED_SRR", unset = srr_om)
+if (identical(tolower(trimws(srr_env)), "all")) {
+  srr_run = intersect(srr6, names(eqls))
+} else {
+  srr_run = intersect(trimws(strsplit(srr_env, ",", fixed = TRUE)[[1]]),
+                      names(eqls))
+}
+if (!length(srr_run))
+  stop("No SRR from BM_CLOSED_SRR=", srr_env, " found in eqls.", call. = FALSE)
+
+sigma = as.numeric(Sys.getenv("BM_SHORTCUT_SIGMA", unset = "0.2"))
+rho   = as.numeric(Sys.getenv("BM_SHORTCUT_RHO",   unset = "0"))
+nits  = as.integer(Sys.getenv("BM_SHORTCUT_NITS",  unset = "100"))
+if (!is.finite(sigma) || sigma < 0)
+  stop("BM_SHORTCUT_SIGMA must be a finite non-negative number.", call. = FALSE)
+if (!is.finite(nits) || nits < 1L)
+  stop("BM_SHORTCUT_NITS must be a positive integer.", call. = FALSE)
+```
+
+# Short-cut `hcrICES`
+
+EqSim Type 1 SSB error (`eqSimErr`) multiplies perceived numbers before the
+HCR. Operating Model SRR(s): `r paste(srr_run, collapse = ", ")`.
+\(\sigma = `r sigma`\), \(\rho = `r rho`\), `r nits` iterations.
+
+```{r scenario-shortcut}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLBacktest", "FLasher")
+ncores = max(1L, detectCores() - 4L)
+libs = .libPaths()
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+tryCatch({
+  clusterExport(cl, c("flr_pkgs", "libs", "om", "eqls", "eqs", "srDev",
+                      "startYr", "endYr", "bndTac", "bndWhen",
+                      "sigma", "rho", "nits"),
+                envir = environment())
+  clusterEvalQ(cl, {
+    .libPaths(libs)
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    NULL
+  })
+  scen = list()
+  for (nm in srr_run) {
+    clusterExport(cl, "nm", envir = environment())
+    scen[[nm]] = FLStocks(foreach(id = sids,
+                                  .packages = flr_pkgs,
+                                  .export = c("om", "eqls", "eqs", "srDev",
+                                              "startYr", "endYr", "nm",
+                                              "bndTac", "bndWhen",
+                                              "sigma", "rho", "nits")) %dopar% {
+      stk = om[[id]]
+      if (dims(stk)$iter < nits)
+        stk = propagate(stk, nits)
+      rec = srDev[[nm]][[id]]
+      if (dims(rec)$iter < nits)
+        rec = propagate(rec, nits)
+      err = eqSimErr(sigma, rho = rho,
+                     start = startYr[id], end = endYr[id],
+                     nits = nits, seed = NULL)
+      hcrICES(stk, eql = eqls[[nm]][[id]],
+              sr_deviances = rec,
+              params = hcrParams(eqs[[id]]),
+              start = startYr[id], end = endYr[id],
+              err = err, implErr = 0,
+              bndTac = bndTac, bndWhen = bndWhen)[[1]]
+    })
+    names(scen[[nm]]) = sids
+  }
+}, finally = stopCluster(cl))
+
+closedLoopShortcut = list(
+  SRR = scen, bndTac = bndTac, bndWhen = bndWhen,
+  srr_run = srr_run, sigma = sigma, rho = rho, nits = nits)
+
+save(closedLoopShortcut,
+     file = file.path(root, "data/results/02.3_closedLoop_shortcut.RData"))
+```
+
+Perfect-information counterpart: [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd).
+SAM OEM: [`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).

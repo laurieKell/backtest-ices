@@ -1,0 +1,205 @@
+---
+title: "Open-loop benchmark projections"
+subtitle: "Methods — historical fwd at ICES Ftar and OM FMSY, six SRRs"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+**Methods — Benchmark projections** (`tex/project-markup.tex`): historical
+open-loop `fwd` from 1990 (or two years after the first assessment year if later)
+to the terminal year, compared with the realised assessment.
+
+Two constant-$F$ arms are run for each stock and each OM / SRR scenario in
+`eqls`:
+
+1. **ICES $F_{\mathrm{tar}}$** — published ICES $F_{\mathrm{MSY}}$ from `eqs` /
+   `bh1` (SAG), held fixed across all SRR branches. Saved under
+   `openLoop$SRR` / `openLoop$Recruits`.
+2. **OM $F_{\mathrm{MSY}}$** — that scenario's own equilibrium $F_{\mathrm{MSY}}$
+   from `refpts(eqls[[srr]][[sid]])["msy", "harvest"]`. Saved under
+   `openLoop$OM_FMSY` / `openLoop$OM_FMSY_Recruits`.
+
+Same Operating Models as [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd),
+built in [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd) (`oms`, `eqls`).
+The only difference from the closed loop is the harvest policy: constant $F$
+from 1990 here, ICES HCR from 2015 there. Both start from the historical
+assessment (`oms`).
+
+| Uncertainty | Operating Model | `fwd` residuals | Object |
+|-------------|:---------------:|-----------------|--------|
+| `rec` | `oms` | historical rec / geometric mean | `Recruits` / `OM_FMSY_Recruits` |
+| `srr` | `oms` | `srResiduals(eq)` | `SRR` / `OM_FMSY` |
+
+ICES $F_{\mathrm{tar}}$ is held fixed; each SRR supplies its own biology /
+stock–recruitment and (for the OM arm) its own $F_{\mathrm{MSY}}$. Historical
+projections keep the assessment's year-specific $M$, mass and maturity and
+replay recruitment residuals, so the productivity that actually occurred is
+held common across policies.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+dir.create(file.path(here, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(root, "data/results"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.1_openLoop"), recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  echo      = FALSE, 
+  warning   = FALSE, 
+  message   = FALSE, 
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.1_openLoop/"),
+  fig.path  = file.path(here, "tex/figs", "02.1_openLoop-"),
+  fig.width = 9, 
+  fig.height= 5, 
+  dev       ="png")
+Fig=0
+Tab=0
+```
+
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(FLBacktest)
+  library(FLasher)
+  library(doParallel)
+  library(parallel)
+  library(foreach)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/loadStocks.R"))
+source(file.path(here, "R/om.R"))
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+if (!exists("eqs")) {
+  if (!"bh1" %in% names(eqls))
+    stop("eqs missing and eqls[['bh1']] not found — knit 01.0 first.",
+         call. = FALSE)
+  eqs = eqls[["bh1"]]
+}
+sids = as.character(stocks$sid)
+source(file.path(here, "R/om.R"))
+require_om_gate(root, sids)
+om   = oms
+srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
+recDev = FLQuants(lapply(oms, function(x) {
+  r = rec(x)
+  r %/% exp(mean(log(c(r)), na.rm = TRUE))
+}))
+startYr = setNames(vapply(sids, function(id)
+  openloop_start(om[[id]]), integer(1L)), sids)
+endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+```
+
+# Open-loop `fwd`
+
+Two constant-$F$ benchmarks on the historical assessment Operating Models
+(`oms`), all SRR scenarios in `eqls`. Each `fwd` is
+`FLStocks(foreach(id = sids))`. Simulations start in 1990 from `oms` where
+the assessment allows, or in the second year after `minyear` if the series
+begins after 1990.
+
+**Saved object** (`data/results/02.1_openLoop.RData`):
+
+- `openLoop$Recruits[[srr]][[sid]]` — ICES $F_{\mathrm{tar}}$, `recDev`
+- `openLoop$SRR[[srr]][[sid]]` — ICES $F_{\mathrm{tar}}$, `srDev` (paper default)
+- `openLoop$OM_FMSY_Recruits[[srr]][[sid]]` — OM $F_{\mathrm{MSY}}$, `recDev`
+- `openLoop$OM_FMSY[[srr]][[sid]]` — OM $F_{\mathrm{MSY}}$, `srDev`
+
+```{r scenario-fwd}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLBacktest", "FLasher")
+ncores = max(1L, detectCores() - 4L)
+libs = .libPaths()
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+tryCatch({
+  clusterExport(cl, c("flr_pkgs", "libs"), envir = environment())
+  clusterEvalQ(cl, {
+    .libPaths(libs)
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    NULL
+  })
+  clusterExport(cl, c("om", "eqls", "eqs", "recDev", "srDev",
+                      "startYr", "endYr", "sids"), envir = environment())
+  scen       = list()
+  scen2      = list()
+  scen_om    = list()
+  scen2_om   = list()
+  # Six SRR paper branches only (not scn0–scn2 diagnostics).
+  srr_run = intersect(c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3"), names(eqls))
+  for (nm in srr_run) {
+    clusterExport(cl, "nm", envir = environment())
+
+    # --- ICES Ftar (published SAG FMSY on eqs / bh1), fixed across SRRs ---
+    scen[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                  .export = c("om", "eqls", "eqs", "recDev",
+                                              "startYr", "endYr", "nm")) %dopar% {
+      fices = c(refpts(eqs[[id]])["FMSY", "harvest"])
+      ftrg  = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fices
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]], residuals = recDev[[id]])
+    })
+    names(scen[[nm]]) = sids
+
+    scen2[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                   .export = c("om", "eqls", "eqs", "srDev",
+                                               "startYr", "endYr", "nm")) %dopar% {
+      fices = c(refpts(eqs[[id]])["FMSY", "harvest"])
+      ftrg  = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fices
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]],
+          residuals = srDev[[nm]][[id]])
+    })
+    names(scen2[[nm]]) = sids
+
+    # --- OM FMSY from this scenario's FLBRP (msy harvest) ---
+    scen_om[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                     .export = c("om", "eqls", "recDev",
+                                                 "startYr", "endYr", "nm")) %dopar% {
+      fom  = c(refpts(eqls[[nm]][[id]])["msy", "harvest"])
+      ftrg = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fom
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]], residuals = recDev[[id]])
+    })
+    names(scen_om[[nm]]) = sids
+
+    scen2_om[[nm]] = FLStocks(foreach(id = sids, .packages = flr_pkgs,
+                                      .export = c("om", "eqls", "srDev",
+                                                  "startYr", "endYr", "nm")) %dopar% {
+      fom  = c(refpts(eqls[[nm]][[id]])["msy", "harvest"])
+      ftrg = window(fbar(om[[id]]), start = startYr[id], end = endYr[id]) %=% fom
+      FLasher::fwd(om[[id]], fbar = ftrg, sr = eqls[[nm]][[id]],
+          residuals = srDev[[nm]][[id]])
+    })
+    names(scen2_om[[nm]]) = sids
+  }
+}, finally = stopCluster(cl))
+ftar  = scen[["bh1"]]
+ftar2 = scen2[["bh1"]]
+openLoop = list(
+  Recruits         = scen,
+  SRR              = scen2,
+  OM_FMSY_Recruits = scen_om,
+  OM_FMSY          = scen2_om)
+save(openLoop, startYr, endYr,
+     file = file.path(root, "data/results/02.1_openLoop.RData"))
+```

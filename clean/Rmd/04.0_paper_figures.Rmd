@@ -1,0 +1,127 @@
+---
+title: "Paper figures (funder draft)"
+subtitle: "Loads saved results — does not re-run the MSE"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+Contract / funder figures from saved objects (`bh3` OM; ICES HCR inputs on
+`bh1`). The published trajectory figure is
+[`scripts/main_traj_facet.R`](../scripts/main_traj_facet.R)
+(plain ggplot2 facet). This notebook is a short digest plus
+`FLCore::plot` of the four case-study `FLStock`s.
+
+`FLCore` exports `plot` for `FLStock` / `FLStocks` (lattice). It does **not**
+export `ggplot`; paper facets use ggplot2.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+dir.create(file.path(here, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  fig.path  = file.path(here, "tex/figs", "04.0_paper-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       = "png")
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(plyr)
+  library(FLBacktest)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+theme_set(theme_paper())
+load_om(root)
+require_om_gate(root, as.character(stocks$sid))
+load(file.path(root, "data/results/02.1_openLoop.RData"))
+load(file.path(root, "data/results/02.2_closedLoop.RData"))
+load(file.path(root, "data/results/02.5_rebuild.RData"))
+eqs <- eqls[["bh1"]]
+if (!srr_om %in% names(openLoop[["SRR"]]) ||
+    !srr_om %in% names(closedLoop[["SRR"]]) ||
+    is.null(openLoop[["OM_FMSY"]][[srr_om]]))
+  stop("Need openLoop$SRR / OM_FMSY and closedLoop$SRR for ", srr_om,
+       call. = FALSE)
+```
+
+# Case-study stocks (FLCore::plot)
+
+```{r flcore-plot, fig.height=8, fig.width=9}
+oms4 <- FLStocks(oms[case_sids])
+print(FLCore::plot(oms4))
+```
+
+Historical assessment series for the four gadoids (lattice `FLCore::plot`).
+
+```{r flcore-arms, fig.height=8, fig.width=9}
+id <- case_sids[[1]]
+print(FLCore::plot(FLStocks(
+  Historical = oms[[id]],
+  Ftar       = openLoop[["SRR"]][[srr_om]][[id]],
+  OM_FMSY    = openLoop[["OM_FMSY"]][[srr_om]][[id]],
+  Advice     = closedLoop[["SRR"]][[srr_om]][[id]]
+)))
+```
+
+Same four arms for `r case_labs[[1]]`.
+
+# Terminal status (ggplot2)
+
+```{r digest-bars, fig.height=5, fig.width=9}
+term_ssb <- function(stk) {
+  yr <- dims(stk)$maxyear
+  c(ssb(stk)[, ac(yr)])
+}
+tab <- ldply(case_sids, function(id) {
+  btrig <- c(refpts(eqs[[id]])["MSYBtrigger", "ssb"])
+  data.frame(
+    stock = unname(case_labs[id]),
+    arm = c("Historical", "ICES Ftar", "OM FMSY", "Advice rule"),
+    SSB_Btrig = c(
+      term_ssb(oms[[id]]),
+      term_ssb(openLoop[["SRR"]][[srr_om]][[id]]),
+      term_ssb(openLoop[["OM_FMSY"]][[srr_om]][[id]]),
+      term_ssb(closedLoop[["SRR"]][[srr_om]][[id]])
+    ) / btrig,
+    stringsAsFactors = FALSE)
+})
+tab$arm <- factor(tab$arm, levels = c("Historical", "ICES Ftar", "OM FMSY",
+                                      "Advice rule"))
+tab$stock <- factor(tab$stock, levels = unname(case_labs[case_sids]))
+ggplot(tab, aes(arm, SSB_Btrig, fill = arm)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey40") +
+  geom_col(width = 0.7) +
+  facet_wrap(~ stock, nrow = 1) +
+  scale_fill_manual(values = paper_cols[c("Historical", "ICES Ftar",
+                                          "OM FMSY", "Advice rule")],
+                    guide = "none") +
+  labs(x = NULL, y = expression(SSB / B[trigger])) +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+Dashed line is \(MSYB_{\mathrm{trigger}}\). The full Historical / Advice-rule
+time series (plus Future) is `tex/figs/traj_facet.pdf` from
+`scripts/main_traj_facet.R`.

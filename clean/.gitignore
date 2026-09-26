@@ -1,0 +1,15 @@
+Rmd/*.html
+Rmd/cache/
+data/om/
+data/results/
+data/interim/
+data/sdGraphs/
+data/WGCSE/
+tex/*.aux
+tex/*.log
+tex/*.out
+tex/*.bbl
+tex/*.blg
+tex/*.fdb_latexmk
+tex/*.fls
+tex/*.synctex.gz

@@ -1,0 +1,594 @@
+---
+title: "Multi-SRR sensitivity for peer-review revision"
+subtitle: "Four case-study stocks — review notebook only (not part of the funder draft)"
+author: "Laurence Kell, Sea++"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+> **Not the funder paper.** The contract / funder draft (`tex/report.tex`,
+> abstract) stays on the **bh3** reference Operating Model and single-OM
+> tables. This notebook loads saved pipeline objects and puts **all** SRR
+> branches side by side for the four Paper-1 case studies, so you can decide
+> what (if anything) to promote into a peer-review revision.
+
+Arms compared (Historical window, 2015–terminal for mean $F$; terminal year
+for SSB ratios):
+
+| Label | Source |
+|-------|--------|
+| Historical | `oms` (assessment) |
+| ICES $F_{\mathrm{tar}}$ | `openLoop$SRR` — constant published SAG $F_{\mathrm{MSY}}$ |
+| OM $F_{\mathrm{MSY}}$ | `openLoop$OM_FMSY` — scenario's own equilibrium $F_{\mathrm{MSY}}$ |
+| Advice rule | `closedLoop$SRR` — `hcrICES` from 2015 (`bndTac`) |
+
+ICES HCR inputs ($F_{\mathrm{tar}}$, $B_{\lim}$, $MSYB_{\mathrm{trigger}}$)
+remain **bh1** / SAG for every SRR branch. Operating Model $B_{\mathrm{MSY}}$
+and $F_{\mathrm{MSY}}$ are performance metrics from `eqls[[srr]]`.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(here, "Rmd/cache", "04.1_multiSRR_review"), recursive = TRUE,
+           showWarnings = FALSE)
+
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo       = FALSE,
+  warning    = FALSE,
+  message    = FALSE,
+  error     = FALSE,
+  cache      = FALSE,
+  cache.path = file.path(here, "Rmd/cache", "04.1_multiSRR_review/"),
+  fig.path   = file.path(here, "tex/figs", "04.1_multiSRR_review-"),
+  fig.width  = 10,
+  fig.height = 5,
+  dev        = "png")
+
+Fig = 0
+Tab = 0
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(plyr)
+})
+
+source(file.path(here, "R/constants.R"))
+theme_set(theme_paper())
+update_geom_defaults("line", list(linewidth = 0.85))
+
+cols_pol = c(
+  Historical          = "#000000",
+  "ICES Ftar"         = "#0072B2",
+  "OM FMSY"           = "#009E73",
+  "Advice rule"       = "#D55E00")
+```
+
+```{r load}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+load(file.path(root, "data/results/02.1_openLoop.RData"))
+load(file.path(root, "data/results/02.2_closedLoop.RData"))
+
+rebuild_path = file.path(root, "data/results/02.5_rebuild.RData")
+rebuild_ok   = file.exists(rebuild_path)
+rebuild_srr  = NA_character_
+if (rebuild_ok) {
+  # Isolate rebuild objects so they do not overwrite open/closed loop.
+  rb_env = new.env(parent = emptyenv())
+  load(rebuild_path, envir = rb_env)
+  rebuild_srr = if (exists("srr", envir = rb_env, inherits = FALSE))
+    as.character(get("srr", envir = rb_env)) else NA_character_
+  rebuild_names = ls(envir = rb_env)
+}
+
+case_sids = c(
+  "cod.27.7e-k",
+  "whg.27.7a",
+  "cod.27.7a",
+  "whg.27.7b-ce-k")
+case_labs = c(
+  "cod.27.7e-k"    = "Celtic Sea cod",
+  "whg.27.7a"      = "Irish Sea whiting",
+  "cod.27.7a"      = "Irish Sea cod",
+  "whg.27.7b-ce-k" = "Celtic Sea whiting")
+
+# Prefer stocks.csv labels when available; fall back to case_labs.
+case_name = setNames(vapply(case_sids, function(id) {
+  i = match(id, as.character(stocks$sid))
+  if (!is.na(i)) as.character(stocks$name[i]) else unname(case_labs[id])
+}, character(1L)), case_sids)
+
+eqs = eqls[["bh1"]]
+srr6 = c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3")
+srr_all = intersect(srr6, names(eqls))
+miss_srr = setdiff(srr6, srr_all)
+if (length(miss_srr))
+  stop("eqls is missing ", paste(miss_srr, collapse = ", "), call. = FALSE)
+# Diagnostics scn0–scn2 stay in eqls but are not open-/closed-loop SRRs.
+startYr_ar = 2015L
+endYr = setNames(vapply(case_sids, function(id)
+  as.integer(dims(oms[[id]])$maxyear), integer(1L)), case_sids)
+
+if (is.null(openLoop[["OM_FMSY"]]))
+  stop("openLoop$OM_FMSY missing — knit 02.1.", call. = FALSE)
+has_om_fmsy = TRUE
+```
+
+# Inventory
+
+```{r inventory}
+inv_row = function(nm) {
+  ol  = nm %in% names(openLoop[["SRR"]]) &&
+    all(case_sids %in% names(openLoop[["SRR"]][[nm]]))
+  omf = has_om_fmsy && nm %in% names(openLoop[["OM_FMSY"]]) &&
+    all(case_sids %in% names(openLoop[["OM_FMSY"]][[nm]]))
+  cl  = nm %in% names(closedLoop[["SRR"]]) &&
+    all(case_sids %in% names(closedLoop[["SRR"]][[nm]]))
+  miss_cl = if (nm %in% names(closedLoop[["SRR"]]))
+    setdiff(case_sids, names(closedLoop[["SRR"]][[nm]])) else case_sids
+  data.frame(
+    SRR = nm,
+    eqls = nm %in% names(eqls),
+    openLoop_SRR = ol,
+    openLoop_OM_FMSY = omf,
+    closedLoop_SRR = cl,
+    missing_closed_case = if (length(miss_cl)) paste(miss_cl, collapse = ", ")
+      else "—",
+    stringsAsFactors = FALSE)
+}
+inv = ldply(srr_all, inv_row)
+
+n_ol  = sum(inv$openLoop_SRR)
+n_omf = sum(inv$openLoop_OM_FMSY)
+n_cl  = sum(inv$closedLoop_SRR)
+miss_any_cl = inv$SRR[!inv$closedLoop_SRR]
+```
+
+**Operating Model branches in `eqls`:** `r paste(srr_all, collapse = ", ")`
+(`r length(srr_all)` SRRs).
+
+**Case studies:** `r paste(sprintf("%s (%s)", case_name, case_sids), collapse = "; ")`.
+
+| Object | Case-study coverage |
+|--------|---------------------|
+| `eqls` | `r length(srr_all)` / `r length(srr_all)` SRRs |
+| `openLoop$SRR` (ICES $F_{\mathrm{tar}}$) | `r n_ol` / `r length(srr_all)` |
+| `openLoop$OM_FMSY` | `r n_omf` / `r length(srr_all)` |
+| `closedLoop$SRR` (Advice rule) | `r n_cl` / `r length(srr_all)` |
+| `02.5_rebuild` | `r if (rebuild_ok) paste0("present; SRR = ", ifelse(is.na(rebuild_srr), "unknown", rebuild_srr)) else "file missing"` |
+
+```{r inventory-table}
+knitr::kable(
+  inv,
+  caption = paste0("Table ", Tab <<- Tab + 1,
+                   ". SRR inventory for the four case studies."),
+  row.names = FALSE)
+```
+
+```{r missing-cl-note, results='asis'}
+if (length(miss_any_cl)) {
+  cat("**Missing closed-loop SRRs for case stocks:** ",
+      paste(miss_any_cl, collapse = ", "), ".\n", sep = "")
+} else {
+  cat("**No missing closed-loop SRRs** among the four case studies;",
+      " all branches in `eqls` have Advice-rule trajectories.\n")
+}
+```
+
+```{r rebuild-note, results='asis'}
+rb_lab = if (isTRUE(rebuild_srr == "bh3")) {
+  "**bh3-only**"
+} else if (rebuild_ok) {
+  paste0("SRR = ", rebuild_srr)
+} else {
+  "unavailable"
+}
+cat("**Rebuild note.** `02.5_rebuild.RData` is ", rb_lab, ".\n", sep = "")
+```
+
+Future / years-to-rebuild comparisons across SRRs are **not** available here.
+This notebook therefore focuses on **Historical-window** summaries and
+trajectories from open- and closed-loop objects. Open loop always stores all
+six SRRs; closed loop defaults to **bh3** (`02.2`). For full closed-loop
+coverage re-knit `02.2` with `BM_CLOSED_SRR=all` before this review.
+Extending rebuild to every SRR would mean re-knitting
+[`02.5_rebuild.Rmd`](02.5_rebuild.Rmd) in a multi-SRR loop; do that only if
+peer review needs Future panels by SRR.
+
+# Summary tables
+
+Metrics match `03.0_digest` / `scripts/compute_openloop_metrics.R`:
+
+- **Terminal** $SSB / MSYB_{\mathrm{trigger}}$ (ICES trigger from `eqls$bh1`)
+- **Mean** $\bar F$ and $\bar F / F_{\mathrm{tar}}$ over **2015–terminal**
+- OM $F_{\mathrm{MSY}}$ vs ICES $F_{\mathrm{tar}}$; $B_{\mathrm{MSY}} / B_{\mathrm{trigger}}$ per SRR
+- Optional $\Delta$ (Advice − Historical) in $SSB / B_{\mathrm{trigger}}$
+
+```{r metrics}
+term_ssb = function(stk) {
+  yr = dims(stk)$maxyear
+  x  = ssb(stk)[, ac(yr)]
+  if (dims(x)$iter > 1) c(iterMedians(x)) else c(x)
+}
+
+win_mean_F = function(stk, y0 = startYr_ar) {
+  yT = dims(stk)$maxyear
+  y0 = max(as.integer(dims(stk)$minyear), as.integer(y0))
+  fb = fbar(window(stk, start = y0, end = yT))
+  if (dims(fb)$iter > 1) mean(c(iterMedians(fb)), na.rm = TRUE)
+  else mean(c(fb), na.rm = TRUE)
+}
+
+arm_metrics = function(stk, btrig, ftar) {
+  if (is.null(stk))
+    stop("arm_metrics: NULL stock", call. = FALSE)
+  Fb = win_mean_F(stk)
+  c(SSB_Btrig = term_ssb(stk) / btrig,
+    F         = Fb,
+    F_Ftar    = Fb / ftar)
+}
+
+sum_tab = ldply(srr_all, function(nm) {
+  ldply(case_sids, function(id) {
+    btrig = c(refpts(eqs[[id]])["MSYBtrigger", "ssb"])
+    ftar  = c(refpts(eqs[[id]])["FMSY", "harvest"])
+    rp_om = refpts(eqls[[nm]][[id]])
+    fmsy  = c(rp_om["msy", "harvest"])
+    bmsy  = c(rp_om["msy", "ssb"])
+
+    h  = arm_metrics(oms[[id]], btrig, ftar)
+    o  = arm_metrics(openLoop[["SRR"]][[nm]][[id]], btrig, ftar)
+    if (!has_om_fmsy || is.null(openLoop[["OM_FMSY"]][[nm]][[id]]))
+      stop("Missing openLoop$OM_FMSY$", nm, "$", id, call. = FALSE)
+    if (is.null(closedLoop[["SRR"]][[nm]][[id]]))
+      stop("Missing closedLoop$SRR$", nm, "$", id, call. = FALSE)
+    om = arm_metrics(openLoop[["OM_FMSY"]][[nm]][[id]], btrig, ftar)
+    a  = arm_metrics(closedLoop[["SRR"]][[nm]][[id]], btrig, ftar)
+
+    data.frame(
+      SRR = nm, sid = id, stock = unname(case_name[id]),
+      year = endYr[id],
+      Ftar = ftar, Fmsy_om = fmsy,
+      Fmsy_over_Ftar = fmsy / ftar,
+      Bmsy_over_Btrig = bmsy / btrig,
+      hist_SSB_Btrig = h["SSB_Btrig"],
+      ftar_SSB_Btrig = o["SSB_Btrig"],
+      omF_SSB_Btrig  = om["SSB_Btrig"],
+      ar_SSB_Btrig   = a["SSB_Btrig"],
+      hist_F = h["F"], ftar_F = o["F"], omF_F = om["F"], ar_F = a["F"],
+      hist_F_Ftar = h["F_Ftar"], ftar_F_Ftar = o["F_Ftar"],
+      omF_F_Ftar = om["F_Ftar"], ar_F_Ftar = a["F_Ftar"],
+      delta_SSB_Btrig = a["SSB_Btrig"] - h["SSB_Btrig"],
+      stringsAsFactors = FALSE)
+  })
+})
+
+sum_tab$stock = factor(sum_tab$stock, levels = unname(case_name[case_sids]))
+sum_tab$SRR   = factor(sum_tab$SRR, levels = srr_all)
+sum_tab = sum_tab[order(sum_tab$stock, sum_tab$SRR), ]
+rownames(sum_tab) = NULL
+
+save(sum_tab, inv, case_sids, srr_all, rebuild_srr,
+     file = file.path(root, "data/results/04.1_multiSRR_review.RData"))
+```
+
+## Terminal SSB / trigger and mean $F$ (2015–terminal)
+
+Wide table: one row per stock × SRR.
+
+```{r table-main, results='asis'}
+fmt2 = function(x) sprintf("%.2f", x)
+show = sum_tab[, c(
+  "stock", "SRR",
+  "hist_SSB_Btrig", "ftar_SSB_Btrig", "omF_SSB_Btrig", "ar_SSB_Btrig",
+  "hist_F", "ftar_F", "omF_F", "ar_F",
+  "hist_F_Ftar", "ftar_F_Ftar", "omF_F_Ftar", "ar_F_Ftar",
+  "delta_SSB_Btrig")]
+knitr::kable(
+  show, digits = 2, row.names = FALSE,
+  col.names = c(
+    "Stock", "SRR",
+    "Hist SSB/$B_{trig}$", "ICES $F_{tar}$ SSB/$B_{trig}$",
+    "OM $F_{MSY}$ SSB/$B_{trig}$", "AR SSB/$B_{trig}$",
+    "Hist $\\bar F$", "ICES $F_{tar}$ $\\bar F$",
+    "OM $F_{MSY}$ $\\bar F$", "AR $\\bar F$",
+    "Hist $F/F_{tar}$", "ICES $F_{tar}$ $F/F_{tar}$",
+    "OM $F_{MSY}$ $F/F_{tar}$", "AR $F/F_{tar}$",
+    "$\\Delta$ AR−Hist"),
+  caption = paste0(
+    "Table ", Tab <<- Tab + 1,
+    ". Terminal SSB/$B_{trigger}$ and mean $\\bar F$ (2015–terminal) ",
+    "across SRRs. Historical SSB/$B_{trigger}$ does not depend on the OM SRR ",
+    "(same assessment); $\\bar F$ likewise. Counterfactual columns do."))
+```
+
+## OM $F_{\mathrm{MSY}}$ vs ICES $F_{\mathrm{tar}}$; $B_{\mathrm{MSY}}/B_{\mathrm{trigger}}$
+
+```{r table-refpts}
+rp_show = sum_tab[, c(
+  "stock", "SRR", "Ftar", "Fmsy_om", "Fmsy_over_Ftar", "Bmsy_over_Btrig")]
+knitr::kable(
+  rp_show, digits = 3, row.names = FALSE,
+  col.names = c(
+    "Stock", "SRR",
+    "ICES $F_{tar}$", "OM $F_{MSY}$",
+    "OM $F_{MSY}$ / ICES $F_{tar}$",
+    "$B_{MSY}$ / $B_{trigger}$"),
+  caption = paste0(
+    "Table ", Tab <<- Tab + 1,
+    ". Published ICES $F_{tar}$ (fixed) versus Operating Model ",
+    "$F_{MSY}$ and $B_{MSY}/B_{trigger}$ by SRR."))
+```
+
+```{r heat-delta, fig.height=4.5, fig.width=9}
+p_d = ggplot(sum_tab, aes(x = SRR, y = stock, fill = delta_SSB_Btrig)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_text(aes(label = sprintf("%+.1f", delta_SSB_Btrig)), size = 3) +
+  scale_fill_gradient2(
+    low = "#D55E00", mid = "#ecf0f1", high = "#0072B2", midpoint = 0,
+    name = expression(Delta ~ SSB / B[trig])) +
+  labs(x = NULL, y = NULL,
+       title = expression(
+         Delta ~ (Advice ~ rule - Historical) ~ SSB / B[trigger])) +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right")
+print(p_d)
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. $\Delta$ terminal $SSB/B_{\mathrm{trigger}}$
+(Advice rule − Historical). Blue = Advice rule ends higher; orange = lower.
+
+```{r heat-fmsy, fig.height=4.5, fig.width=9}
+p_f = ggplot(sum_tab, aes(x = SRR, y = stock, fill = log10(Fmsy_over_Ftar))) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_text(aes(label = sprintf("%.2f", Fmsy_over_Ftar)), size = 3) +
+  scale_fill_gradient2(
+    low = "#0072B2", mid = "#ecf0f1", high = "#D55E00", midpoint = 0,
+    name = expression(log[10](F[MSY]/F[tar]))) +
+  labs(x = NULL, y = NULL,
+       title = expression(OM ~ F[MSY] / ICES ~ F[tar] ~ "(labels = ratio)")) +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right")
+print(p_f)
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. OM $F_{\mathrm{MSY}}$ / ICES $F_{\mathrm{tar}}$
+by stock × SRR (tile colour on $\log_{10}$ scale; labels are the ratio).
+
+# Trajectories
+
+One stock per figure; columns = SRR; colour = policy. $Y$-scales free within
+each stock. Window starts in 2010 for readability (Advice rule still peels off
+in 2015). Catch is included as a third panel set below.
+
+```{r traj-data, results='hide'}
+as_ts = function(stk, qfun, start = 2010L) {
+  yT = dims(stk)$maxyear
+  y0 = max(as.integer(dims(stk)$minyear), as.integer(start))
+  x  = qfun(window(stk, start = y0, end = yT))
+  if (dims(x)$iter > 1) x = iterMedians(x)
+  df = as.data.frame(x)
+  df[, c("year", "data")]
+}
+
+build_traj = function(qfun, qname) {
+  ldply(case_sids, function(id) {
+    ldply(srr_all, function(nm) {
+      if (is.null(openLoop[["SRR"]][[nm]][[id]]))
+        stop("Missing openLoop$SRR$", nm, "$", id, call. = FALSE)
+      if (!has_om_fmsy || is.null(openLoop[["OM_FMSY"]][[nm]][[id]]))
+        stop("Missing openLoop$OM_FMSY$", nm, "$", id, call. = FALSE)
+      if (is.null(closedLoop[["SRR"]][[nm]][[id]]))
+        stop("Missing closedLoop$SRR$", nm, "$", id, call. = FALSE)
+      arms = list(
+        Historical = oms[[id]],
+        "ICES Ftar" = openLoop[["SRR"]][[nm]][[id]],
+        "OM FMSY" = openLoop[["OM_FMSY"]][[nm]][[id]],
+        "Advice rule" = closedLoop[["SRR"]][[nm]][[id]])
+      ldply(names(arms), function(pol) {
+        stk = arms[[pol]]
+        if (is.null(stk))
+          stop("NULL stock for ", pol, " / ", nm, " / ", id, call. = FALSE)
+        df = as_ts(stk, qfun)
+        df$sid = id
+        df$stock = unname(case_name[id])
+        df$SRR = nm
+        df$policy = pol
+        df$qname = qname
+        df
+      })
+    })
+  })
+}
+
+traj_ssb = build_traj(ssb, "SSB")
+traj_f   = build_traj(fbar, "F")
+traj_c   = build_traj(catch, "Catch")
+traj = rbind(traj_ssb, traj_f, traj_c)
+traj$stock  = factor(traj$stock, levels = unname(case_name[case_sids]))
+traj$SRR    = factor(traj$SRR, levels = srr_all)
+traj$policy = factor(traj$policy, levels = names(cols_pol))
+traj$qname  = factor(traj$qname, levels = c("SSB", "F", "Catch"))
+```
+
+```{r traj-ssb, fig.height=8, fig.width=12}
+for (id in case_sids) {
+  nm = unname(case_name[id])
+  d  = subset(traj, sid == id & qname == "SSB")
+  btrig = c(refpts(eqs[[id]])["MSYBtrigger", "ssb"])
+  p = ggplot(d, aes(year, data, colour = policy)) +
+    geom_hline(yintercept = btrig, linetype = 2, colour = bm_col("trigger"),
+               linewidth = 0.4) +
+    geom_line(na.rm = TRUE) +
+    facet_wrap(~ SRR, scales = "free_y", ncol = 3) +
+    scale_colour_manual(values = cols_pol) +
+    labs(title = paste(nm, "— SSB"), x = "Year", y = "SSB",
+         subtitle = "Dashed = ICES MSY Btrigger (fixed)") +
+    theme_paper()
+  print(p)
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SSB trajectories by SRR (facets) for each
+case-study stock. Black Historical, blue ICES $F_{\mathrm{tar}}$, green OM
+$F_{\mathrm{MSY}}$, orange Advice rule.
+
+```{r traj-f, fig.height=8, fig.width=12}
+for (id in case_sids) {
+  nm = unname(case_name[id])
+  d  = subset(traj, sid == id & qname == "F")
+  ftar = c(refpts(eqs[[id]])["FMSY", "harvest"])
+  p = ggplot(d, aes(year, data, colour = policy)) +
+    geom_hline(yintercept = ftar, linetype = 2, colour = bm_col("f_target"),
+               linewidth = 0.4) +
+    geom_line(na.rm = TRUE) +
+    facet_wrap(~ SRR, scales = "free_y", ncol = 3) +
+    scale_colour_manual(values = cols_pol) +
+    labs(title = paste(nm, "— Fbar"), x = "Year", y = expression(bar(F)),
+         subtitle = "Dashed = ICES Ftar (fixed)") +
+    theme_paper()
+  print(p)
+}
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. $\bar F$ trajectories by SRR for each stock.
+
+```{r traj-ssb-grid, fig.height=7, fig.width=11}
+d_ssb = subset(traj, qname == "SSB")
+p_grid = ggplot(d_ssb, aes(year, data, colour = policy)) +
+  geom_line(linewidth = 0.55, na.rm = TRUE) +
+  facet_grid(stock ~ SRR, scales = "free_y") +
+  scale_colour_manual(values = cols_pol) +
+  labs(title = "SSB — stock × SRR overview", x = "Year", y = "SSB") +
+  theme_paper() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = rel(0.7)),
+        strip.text = element_text(size = rel(0.75)))
+print(p_grid)
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SSB overview grid (stocks × SRRs).
+
+# Skim findings
+
+Auto-generated bullets from the summary table (read the heatmaps and tables
+above before promoting any into the paper).
+
+```{r findings, results='asis'}
+# Sign of Advice − Historical at bh3 (reference) vs other SRRs
+bh3 = subset(sum_tab, SRR == "bh3")
+flip = ldply(case_sids, function(id) {
+  base_sign = sign(bh3$delta_SSB_Btrig[bh3$sid == id])
+  sub = subset(sum_tab, sid == id)
+  flips = as.character(sub$SRR[sign(sub$delta_SSB_Btrig) != base_sign &
+                                 !is.na(sub$delta_SSB_Btrig)])
+  data.frame(
+    stock = unname(case_name[id]),
+    bh3_delta = bh3$delta_SSB_Btrig[bh3$sid == id],
+    flip_srrs = if (length(flips)) paste(flips, collapse = ", ") else "none",
+    stringsAsFactors = FALSE)
+})
+
+hi = subset(sum_tab, Fmsy_over_Ftar >= 2)
+lo = subset(sum_tab, Fmsy_over_Ftar <= 0.5)
+extreme = subset(sum_tab, Fmsy_over_Ftar >= 5 | Fmsy_over_Ftar <= 0.2)
+
+cat("- **Sign of Δ (Advice − Historical) vs bh3.** ")
+cat("Where another SRR flips the sign of the bh3 Δ:\n")
+for (i in seq_len(nrow(flip))) {
+  cat(sprintf("  - %s (bh3 Δ = %+.2f): %s\n",
+              flip$stock[i], flip$bh3_delta[i], flip$flip_srrs[i]))
+}
+
+cat("\n- **OM $F_{MSY} \\gg$ ICES $F_{tar}$ (ratio ≥ 2):**\n")
+if (!nrow(hi)) cat("  - none\n") else {
+  for (i in seq_len(nrow(hi)))
+    cat(sprintf("  - %s / %s: ratio = %.2f (OM $F_{MSY}$ = %.3f, $F_{tar}$ = %.3f)\n",
+                hi$stock[i], hi$SRR[i], hi$Fmsy_over_Ftar[i],
+                hi$Fmsy_om[i], hi$Ftar[i]))
+}
+
+cat("\n- **OM $F_{MSY} \\ll$ ICES $F_{tar}$ (ratio ≤ 0.5):**\n")
+if (!nrow(lo)) cat("  - none\n") else {
+  for (i in seq_len(nrow(lo)))
+    cat(sprintf("  - %s / %s: ratio = %.2f\n",
+                lo$stock[i], lo$SRR[i], lo$Fmsy_over_Ftar[i]))
+}
+
+cat("\n- **Extreme mismatches (ratio ≥ 5 or ≤ 0.2) — treat with caution in revision:**\n")
+if (!nrow(extreme)) cat("  - none\n") else {
+  for (i in seq_len(nrow(extreme)))
+    cat(sprintf("  - %s / %s: OM $F_{MSY}/F_{tar}$ = %.2f; OM $F_{MSY}$ arm terminal SSB/$B_{trig}$ = %.2f\n",
+                extreme$stock[i], extreme$SRR[i], extreme$Fmsy_over_Ftar[i],
+                extreme$omF_SSB_Btrig[i]))
+}
+
+# Irish Sea cod pattern (Historical F << Ftar) across SRRs
+isc = subset(sum_tab, sid == "cod.27.7a")
+cat("\n- **Irish Sea cod** (Historical $\\bar F \\ll F_{tar}$): Advice-rule ")
+cat("terminal SSB/$B_{trig}$ ranges ")
+cat(sprintf("%.2f–%.2f across SRRs; ICES $F_{tar}$ arm %.2f–%.2f; ",
+            min(isc$ar_SSB_Btrig, na.rm = TRUE),
+            max(isc$ar_SSB_Btrig, na.rm = TRUE),
+            min(isc$ftar_SSB_Btrig, na.rm = TRUE),
+            max(isc$ftar_SSB_Btrig, na.rm = TRUE)))
+cat(sprintf("Δ (AR−Hist) is negative for %d / %d SRRs.\n",
+            sum(isc$delta_SSB_Btrig < 0, na.rm = TRUE), nrow(isc)))
+
+# Depleted gadoids that gain under Advice
+gain = subset(sum_tab, sid %in% c("cod.27.7e-k", "whg.27.7a") &
+                delta_SSB_Btrig > 0)
+cat("\n- **Celtic Sea cod & Irish Sea whiting:** Advice rule raises ")
+cat(sprintf("SSB/$B_{trig}$ relative to Historical for %d / %d stock×SRR cells.\n",
+            nrow(gain),
+            sum(sum_tab$sid %in% c("cod.27.7e-k", "whg.27.7a"))))
+```
+
+# Peer-review checklist (do not edit report.tex from here)
+
+What would need updating **if** multi-SRR material is promoted into a
+peer-review revision. Checklist only — **do not** rewrite
+`tex/report.tex` / funder Results in this notebook.
+
+1. **Paper tables** — decide whether Results keep a single reference OM
+   (bh3 / scn2) with multi-SRR in SI, or promote a compact stock × SRR
+   summary (Tables above / `data/results/04.1_multiSRR_review.RData`).
+2. **Figures** — pick 1–2 readable trajectory panels (e.g. SSB grid or one
+   stock’s SRR facets); avoid dumping all nine SRRs into the main text.
+3. **Reference OM statement** — keep the funder draft on bh3; for the
+   journal draft, state clearly which OM is narrative and which are
+   sensitivity.
+4. **`docs/paper_outline.md` Next before submission, item i / related** —
+   freeze which OM appears in main figures; note multi-SRR sensitivity
+   lives in this notebook (`04.1`) rather than rewriting funder Results.
+5. **Rebuild / Future** — only if reviewers ask: extend `02.5` beyond bh3
+   and add years-to-trigger / years-to-$B_{\mathrm{MSY}}$ by SRR.
+6. **Extreme SRRs** — flag or drop pathological OM $F_{\mathrm{MSY}}$
+   branches (see skim findings) before any SI table goes to press.
+7. **Do not** change `tex/report.tex` or `abstract.tex` for multi-SRR
+   unless / until the funder paper is intentionally revised.
+
+Saved metrics: `r file.path("data/results", "04.1_multiSRR_review.RData")`.
+Source notebooks: [`02.1_openLoop.Rmd`](02.1_openLoop.Rmd),
+[`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd),
+[`03.0_digest.Rmd`](03.0_digest.Rmd),
+[`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd).

@@ -1,0 +1,184 @@
+---
+title: "Closed-loop counterfactual simulation"
+subtitle: "Methods — historical hcrICES, perfect information, funder OM bh3"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+**Methods — Counterfactual simulation** (`tex/project-markup.tex`): historical
+closed-loop `hcrICES` from 2015 to the terminal year, starting from the
+realised assessment (`oms`), compared with the realised assessment.
+
+Same Operating Models as [`02.1_openLoop.Rmd`](02.1_openLoop.Rmd),
+built in [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd) (`oms`, `eqls`).
+The only difference is the harvest policy: ICES HCR here, constant ICES
+\(F_{\mathrm{MSY}}\) there. The Advice rule does **not** start from the
+open-loop \(F_{\mathrm{target}}\) trajectory.
+
+## Uncertainty treatment
+
+Process / structural uncertainty is carried by **recruitment deviations** and,
+for peer review, by **alternative SRRs**. The funder draft runs the Operating
+Model SRR **bh3** only (`R/constants.R::srr_om`), replaying `srResiduals` from
+that equilibrium. Set `BM_CLOSED_SRR=all` to expand the same HCR loop across
+`bh1`–`bh3` / `rk1`–`rk3` (still reusing each branch's recruitment residuals).
+Short-cut assessment error and SAM sit downstream:
+[`02.3_closedLoop_shortcut.Rmd`](02.3_closedLoop_shortcut.Rmd),
+[`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).
+
+| Layer | What varies | Default funder run |
+|-------|-------------|--------------------|
+| Recdevs | `srResiduals(eqls[[srr]][[id]])` | **bh3** residuals |
+| Alternative SRRs | OM biology / stock–recruitment | **bh3** only (`BM_CLOSED_SRR=all` for six) |
+| Assessment OEM | `err` in `hcrICES` | `NULL` (perfect information) |
+
+ICES \(F_{\mathrm{tar}}\) / \(B_{\mathrm{trigger}}\) / \(B_{\lim}\) are held
+fixed (`hcrParams` from `eqs`). The advised catch carries the ICES TAC
+stability clause (`R/constants.R::hcr_tac_bounds`): year-on-year change limited to
+\(\pm 20\%\) of the previous catch when SSB is at or above
+\(MSYB_{\mathrm{trigger}}\), and unconstrained below it
+(`hcrICES(bndTac, bndWhen = "btrig")`). Historical projections keep the
+assessment's year-specific \(M\), mass and maturity and replay recruitment
+residuals, so the productivity that actually occurred is held common across
+policies.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"),                     recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                 recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.2_closedLoop"), recursive=TRUE, showWarnings=FALSE)
+
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.2_closedLoop/"),
+  fig.path  = file.path(here, "tex/figs", "02.2_closedLoop-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(FLasher)
+  library(FLBacktest)
+  library(doParallel)
+  library(parallel)
+  library(foreach)})
+
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+
+sids = as.character(stocks$sid)
+om   = oms
+if (!exists("eqs")) {
+  if (!"bh1" %in% names(eqls))
+    stop("eqs missing and eqls[['bh1']] not found — knit 01.0 first.",
+         call. = FALSE)
+  eqs = eqls[["bh1"]]
+}
+source(file.path(here, "R/om.R"))
+require_om_gate(root, sids)
+
+srDev = lapply(eqls, function(eq) FLQuants(lapply(eq, srResiduals)))
+startYr = setNames(rep(2015, length(sids)), sids)
+endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+# TAC stability clause (R/om.R): +/-20% year-on-year when SSB >= MSY Btrigger
+bndTac  = hcr_tac_bounds()
+bndWhen = hcr_tac_bnd_when()
+
+# Funder default: one SRR (bh3). BM_CLOSED_SRR=all → six branches.
+srr6 = c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3")
+srr_env = Sys.getenv("BM_CLOSED_SRR", unset = srr_om)
+if (identical(tolower(trimws(srr_env)), "all")) {
+  srr_run = intersect(srr6, names(eqls))
+} else {
+  srr_run = intersect(trimws(strsplit(srr_env, ",", fixed = TRUE)[[1]]),
+                      names(eqls))
+}
+if (!length(srr_run))
+  stop("No SRR from BM_CLOSED_SRR=", srr_env, " found in eqls.", call. = FALSE)
+```
+
+# Closed-loop `hcrICES`
+
+ICES HCR on the historical assessment (`oms`) from **2015**, Operating Model
+SRR(s): `r paste(srr_run, collapse = ", ")`. Perfect information (`err = NULL`).
+Each `hcrICES` is `FLStocks(foreach(id = sids))`. The 2015 stock state is the
+assessment, not the open-loop \(F_{\mathrm{target}}\) run.
+
+```{r scenario-hcr}
+flr_pkgs = c("methods", "FLCore", "FLBRP", "icesdata", "FLBacktest", "FLasher")
+ncores = max(1L, detectCores() - 4L)
+libs = .libPaths()
+cl = makeCluster(ncores)
+registerDoParallel(cl)
+tryCatch({
+  clusterExport(cl, c("flr_pkgs", "libs", "om", "eqls", "eqs", "srDev",
+                      "startYr", "endYr", "bndTac", "bndWhen"),
+                envir = environment())
+  clusterEvalQ(cl, {
+    .libPaths(libs)
+    suppressPackageStartupMessages(
+      lapply(flr_pkgs, library, character.only = TRUE))
+    NULL
+  })
+  scen2 = list()
+  for (nm in srr_run) {
+    clusterExport(cl, "nm", envir = environment())
+    scen2[[nm]] = FLStocks(foreach(id = sids,
+                                   .packages = flr_pkgs,
+                                   .export = c("om", "eqls", "eqs", "srDev",
+                                               "startYr", "endYr", "nm",
+                                               "bndTac", "bndWhen")) %dopar% {
+      hcrICES(om[[id]], eql = eqls[[nm]][[id]],
+              sr_deviances = srDev[[nm]][[id]],
+              params = hcrParams(eqs[[id]]),
+              start = startYr[id], end = endYr[id],
+              err = NULL, implErr = 0,
+              bndTac = bndTac, bndWhen = bndWhen)[[1]]
+    })
+    names(scen2[[nm]]) = sids
+  }
+}, finally = stopCluster(cl))
+closedLoop = list("SRR" = scen2, bndTac = bndTac, bndWhen = bndWhen,
+                  srr_run = srr_run)
+
+save(closedLoop, file=file.path(root, "data/results/02.2_closedLoop.RData"))
+```
+
+Comparison of historical, \(F_{\mathrm{tar}}\) and the HCR, time below
+\(B_{\lim}\) / \(MSYB_{\mathrm{trigger}}\), current status and rebuild
+times are in [`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd).

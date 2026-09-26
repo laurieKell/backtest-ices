@@ -1,0 +1,136 @@
+---
+title: "All-stock digest"
+subtitle: "Pick case studies after the generic backtest — not before"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+One page per knit of **every** stock that passed the Operating Model gate
+and has open- and closed-loop results. Use this to choose which stocks
+need a `06.1`-style case study. Do not put SAM, EqSim essays or
+presentation layout here.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      error     = FALSE)
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(FLCore)
+  library(FLBRP)
+  library(plyr)
+  library(FLBacktest)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+load_om(root)
+require_om_gate(root, as.character(stocks$sid))
+load(file.path(root, "data/results/02.1_openLoop.RData"))
+load(file.path(root, "data/results/02.2_closedLoop.RData"))
+load(file.path(root, "data/results/01.1_lterm_eq.RData"))
+eqs = eqls[["bh1"]]
+srr = "bh3"
+if (!srr %in% names(openLoop[["SRR"]]) || !srr %in% names(closedLoop[["SRR"]]))
+  stop("openLoop/closedLoop SRR has no '", srr, "' — knit 02.1 and 04.2.",
+       call. = FALSE)
+if (is.null(openLoop[["OM_FMSY"]]) || !srr %in% names(openLoop[["OM_FMSY"]]))
+  stop("openLoop$OM_FMSY$", srr, " missing — knit 02.1.", call. = FALSE)
+```
+
+```{r digest}
+term = function(stk, yr) {
+  c(SSB = c(ssb(stk)[, ac(yr)]), F = c(fbar(stk)[, ac(yr)]))
+}
+
+# Mean F over the closed-loop backtest window (2015–terminal), matching
+# tex/report.tex Table results-current.
+win_mean_F = function(stk, y0 = 2015L) {
+  yT = dims(stk)$maxyear
+  y0 = max(as.integer(dims(stk)$minyear), as.integer(y0))
+  mean(c(fbar(window(stk, start = y0, end = yT))), na.rm = TRUE)
+}
+
+tab = ldply(as.character(stocks$sid), function(id) {
+  if (is.null(openLoop[["SRR"]][[srr]][[id]]))
+    stop("Missing openLoop$SRR$", srr, "$", id, " — knit 02.1.", call. = FALSE)
+  if (is.null(closedLoop[["SRR"]][[srr]][[id]]))
+    stop("Missing closedLoop$SRR$", srr, "$", id, " — knit 02.2.", call. = FALSE)
+  yr = dims(oms[[id]])$maxyear
+  rp_ices = refpts(eqs[[id]])
+  rp_om   = refpts(eqls[[srr]][[id]])
+  btrig   = c(rp_ices["MSYBtrigger", "ssb"])
+  ftar    = c(rp_ices["FMSY", "harvest"])
+  fmsy_om = c(rp_om["msy", "harvest"])
+  h  = term(oms[[id]], yr)
+  o  = term(openLoop[["SRR"]][[srr]][[id]], yr)
+  c_ = term(closedLoop[["SRR"]][[srr]][[id]], yr)
+  if (is.null(openLoop[["OM_FMSY"]][[srr]][[id]]))
+    stop("Missing openLoop$OM_FMSY$", srr, "$", id, " — knit 02.1.", call. = FALSE)
+  om = term(openLoop[["OM_FMSY"]][[srr]][[id]], yr)
+  data.frame(
+    sid = id,
+    name = as.character(stocks$name[match(id, stocks$sid)]),
+    year = yr,
+    gate = {
+      p = lterm_eq$pass
+      isTRUE(p$pass[match(id, as.character(p$sid))])
+    },
+    Ftar       = ftar,
+    Fmsy_om    = fmsy_om,
+    hist_SSB_Btrig = h["SSB"] / btrig,
+    ftar_SSB_Btrig = o["SSB"] / btrig,
+    omF_SSB_Btrig  = om["SSB"] / btrig,
+    ar_SSB_Btrig   = c_["SSB"] / btrig,
+    hist_F         = win_mean_F(oms[[id]]),
+    ftar_F         = win_mean_F(openLoop[["SRR"]][[srr]][[id]]),
+    omF_F          = win_mean_F(openLoop[["OM_FMSY"]][[srr]][[id]]),
+    ar_F           = win_mean_F(closedLoop[["SRR"]][[srr]][[id]]),
+    hist_F_Ftar    = win_mean_F(oms[[id]]) / ftar,
+    ftar_F_Ftar    = win_mean_F(openLoop[["SRR"]][[srr]][[id]]) / ftar,
+    omF_F_Ftar     = win_mean_F(openLoop[["OM_FMSY"]][[srr]][[id]]) / ftar,
+    ar_F_Ftar      = win_mean_F(closedLoop[["SRR"]][[srr]][[id]]) / ftar,
+    stringsAsFactors = FALSE)
+})
+save(tab, srr,
+     file = file.path(root, "data/results/03.0_digest.RData"))
+```
+
+**Table 1**. Terminal $SSB/B_{\mathrm{trigger}}$ and mean $F$ over 2015–terminal
+versus ICES $F_{\mathrm{target}}$ and OM $F_{\mathrm{MSY}}$. Reference OM branch
+`r srr`. Case studies: Celtic/Irish Sea cod and whiting.
+
+```{r table}
+cols = c("name", "sid", "year", "gate",
+         "hist_SSB_Btrig", "ftar_SSB_Btrig", "omF_SSB_Btrig", "ar_SSB_Btrig",
+         "hist_F", "ftar_F", "omF_F", "ar_F",
+         "Ftar", "Fmsy_om")
+knitr::kable(
+  tab[, cols],
+  digits = 2, row.names = FALSE,
+  col.names = c("Stock", "SID", "Year", "Gate",
+                "Hist SSB/$B_{trig}$",
+                "ICES $F_{tar}$ SSB/$B_{trig}$",
+                "OM $F_{MSY}$ SSB/$B_{trig}$",
+                "AR SSB/$B_{trig}$",
+                "Hist $\\bar F$",
+                "ICES $F_{tar}$ $\\bar F$",
+                "OM $F_{MSY}$ $\\bar F$",
+                "AR $\\bar F$",
+                "ICES $F_{tar}$", "OM $F_{MSY}$"))
+```
