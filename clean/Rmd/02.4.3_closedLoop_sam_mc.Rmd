@@ -1,0 +1,260 @@
+---
+title: "SAM closed loop: observation-error iterations"
+subtitle: "hcrICES with SAM, scn0–scn2, 100 iterations, survey CV 30%"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+The SAM closed loop of [`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd)
+repeated over many survey realisations, so the Advice-rule outcome carries
+observation error. Check [`02.4.1_sam.Rmd`](02.4.1_sam.Rmd) first.
+
+| Setting | Value | Override |
+|---------|-------|----------|
+| Stocks | SAM stocks + Irish Sea cod (`sam_sids`) | — |
+| Operating Model SRRs | `scn0`, `scn1`, `scn2` | — |
+| Iterations | 100 | `BM_SAM_MC_NITS` |
+| Survey CV (`indexCv`) | 0.3 | `BM_SAM_MC_CV` |
+| Workers | cores − 2 | `BM_SAM_MC_CORES` |
+
+`scn0`: near-linear BH (\(h = 0.999\)); `scn1`: unconstrained BH (as `bh1`);
+`scn2`: BH with steepness prior \(h = 0.7\) (see `01.0_condition_om.Rmd`).
+
+`FLR_SAM` fits one iteration at a time, so each (SRR, stock, iteration) is a
+separate single-iteration `hcrICES` run, from 2015, `implErr = 0`, the TAC
+clause of `02.2`, and recruitment residuals replayed from each SRR (the same
+in every iteration). Iterations differ only in the survey noise. The survey
+seed depends on stock and iteration, not SRR, so the three SRRs see the same
+surveys. Catch-at-age placeholders are passed to SAM as `NA` as in `02.4.1`.
+
+Runs are spread over a PSOCK cluster. Workers load the Operating Model from
+disk and build their own surveys; nothing but job ids is shipped. Each run is
+cached under `data/interim/02.4.3_closedLoop_sam_mc/`, so a re-knit resumes.
+Failed runs are listed and stop the knit after all others finish.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"),                               recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                           recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.4.3_closedLoop_sam_mc"),  recursive=TRUE, showWarnings=FALSE)
+
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.4.3_closedLoop_sam_mc/"),
+  fig.path  = file.path(here, "tex/figs", "02.4.3_closedLoop_sam_mc-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+
+nits <- as.integer(Sys.getenv("BM_SAM_MC_NITS", unset = "100"))
+indexCv <- as.numeric(Sys.getenv("BM_SAM_MC_CV", unset = "0.3"))
+ncores <- as.integer(Sys.getenv("BM_SAM_MC_CORES",
+                                unset = max(1L, parallel::detectCores() - 2L)))
+if (!is.finite(nits) || nits < 1L) stop("BM_SAM_MC_NITS must be >= 1.", call. = FALSE)
+if (!is.finite(indexCv) || indexCv <= 0) stop("BM_SAM_MC_CV must be > 0.", call. = FALSE)
+if (!is.finite(ncores) || ncores < 1L) stop("BM_SAM_MC_CORES must be >= 1.", call. = FALSE)
+```
+
+```{r libs}
+source(file.path(here, "R/sam_oem.R"))
+source(file.path(here, "R/sam_mc.R"))
+sam_libs()
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(FLasher)
+  library(FLBacktest)
+  library(FLfse)
+  library(stockassessment)
+  library(parallel)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+if (!exists("eqs"))
+  eqs <- eqls[["bh1"]]
+
+srr_run <- c("scn0", "scn1", "scn2")
+miss <- setdiff(srr_run, names(eqls))
+if (length(miss))
+  stop("eqls is missing ", paste(miss, collapse = ", "),
+       " — knit 01.0_condition_om.Rmd first.", call. = FALSE)
+
+sids <- sam_sids(oms, stocks)
+require_om_gate(root, sids)
+om <- oms[sids]
+for (s in srr_run) {
+  miss <- setdiff(sids, names(eqls[[s]]))
+  if (length(miss))
+    stop("eqls$", s, " is missing ", paste(miss, collapse = ", "), call. = FALSE)
+}
+
+startYr <- 2015L
+too_short <- names(om)[sapply(om, function(x) dims(x)$maxyear) < startYr]
+if (length(too_short))
+  stop("Terminal year is before 2015 for: ",
+       paste(too_short, collapse = ", "), call. = FALSE)
+
+out <- file.path(root, "data/interim/02.4.3_closedLoop_sam_mc",
+                 sprintf("cv%03d", round(100 * indexCv)))
+dir.create(out, recursive = TRUE, showWarnings = FALSE)
+```
+
+SAM stocks: `r paste(sids, collapse = ", ")`. SRRs:
+`r paste(srr_run, collapse = ", ")`. Iterations: **`r nits`**. Survey CV:
+**`r indexCv`**. Workers: **`r ncores`**. Jobs:
+**`r length(srr_run) * length(sids) * nits`**.
+
+# Closed loop
+
+```{r scenario-hcr}
+jobs <- expand.grid(iter = seq_len(nits), id = sids, srr = srr_run,
+                    stringsAsFactors = FALSE)
+jobs <- jobs[, c("srr", "id", "iter")]
+todo <- !file.exists(mapply(sam_mc_file, out, jobs$srr, jobs$id, jobs$iter))
+message(sum(todo), " of ", nrow(jobs), " runs to do; ",
+        sum(!todo), " cached in ", out)
+
+bndTac <- hcr_tac_bounds()
+bndWhen <- hcr_tac_bnd_when()
+# Global environment so the closure does not carry the knit env to workers.
+worker <- function(k, jobs, sids, indexCv, start, bndTac, bndWhen, out)
+  sam_mc_job(jobs$srr[k], jobs$id[k], jobs$iter[k], sids = sids,
+             indexCv = indexCv, start = start,
+             bndTac = bndTac, bndWhen = bndWhen, out = out)
+environment(worker) <- globalenv()
+t0 <- Sys.time()
+if (any(todo)) {
+  cl <- makeCluster(min(ncores, sum(todo)))
+  res <- tryCatch({
+    clusterCall(cl, sam_mc_init, here = here, root = root, libs = .libPaths())
+    parLapplyLB(cl, which(todo), worker,
+      jobs = jobs, sids = sids, indexCv = indexCv, start = startYr,
+      bndTac = bndTac, bndWhen = bndWhen, out = out)
+  }, finally = stopCluster(cl))
+  fail <- Filter(function(r) !isTRUE(r$ok), res)
+  if (length(fail)) {
+    msg <- vapply(fail, function(r)
+      sprintf("%s / %s / iter %d: %s", r$srr, r$id, as.integer(r$iter), r$msg),
+      character(1))
+    stop(length(fail), " of ", length(res), " SAM closed-loop runs failed ",
+         "(successful runs are cached; re-knit to retry):\n",
+         paste(head(msg, 20), collapse = "\n"), call. = FALSE)
+  }
+}
+runTime <- difftime(Sys.time(), t0, units = "mins")
+
+collected <- lapply(setNames(srr_run, srr_run), function(s)
+  setNames(lapply(sids, function(id)
+    sam_mc_collect(out, s, id, seq_len(nits))), sids))
+retried <- do.call(rbind, lapply(srr_run, function(s)
+  do.call(rbind, lapply(sids, function(id) {
+    a <- attr(collected[[s]][[id]], "seed_attempt")
+    k <- which(a > 1L)
+    if (!length(k)) return(NULL)
+    data.frame(SRR = s, Stock = id, Iter = as.integer(names(a)[k]),
+               Attempt = a[k], stringsAsFactors = FALSE)
+  }))))
+closedLoopSamMC <- lapply(collected, FLStocks)
+rm(collected)
+
+save(closedLoopSamMC, retried, sids, srr_run, nits, indexCv, startYr,
+     bndTac, bndWhen,
+     file = file.path(root, "data/results/02.4.3_closedLoop_sam_mc.RData"))
+```
+
+Run time this knit: `r round(as.numeric(runTime), 1)` min.
+
+A run whose SAM fit fails is retried with a new survey seed (up to three
+attempts). Those runs no longer share the survey with the other SRRs.
+
+**Table `r Tab = Tab + 1; Tab`**. Runs that needed a new survey seed.
+
+```{r retried}
+if (is.null(retried)) {
+  cat("None.\n")
+} else knitr::kable(retried, row.names = FALSE)
+```
+
+# Trajectories
+
+Same layout as `02.2` / `02.3`: metrics relative to the Historical mean,
+facet quantity \(\times\) stock. Line = median over iterations; band = 5–95%.
+
+```{r traj-ribbon, fig.height=9, fig.width=11}
+labs <- setNames(as.character(stocks$name[match(sids, stocks$sid)]), sids)
+print(plot_hcr_ribbon(om, closedLoopSamMC, sids = sids, labels = labs,
+                      start_ar = startYr))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAM closed loop over `r nits` survey
+realisations (CV `r indexCv`), one colour per Operating Model SRR, vs
+historical `FLStock`.
+
+```{r traj-median, fig.height=9, fig.width=11}
+print(plot_hcr_vs_hist(om, closedLoopSamMC, eqs, eqls[srr_run],
+                       sids = sids, labels = labs, start_ar = startYr))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Medians with ICES and Operating Model
+(`scn0`) reference points.
+
+# Terminal year
+
+**Table `r Tab = Tab + 1; Tab`**. Terminal year: median (5–95%) of SSB /
+\(B_{\mathrm{MSY}}\) and \(F\) / \(F_{\mathrm{MSY}}\) for the Operating Model
+SRR, and probability SSB < ICES \(B_{\lim}\).
+
+```{r terminal-table}
+q3 <- function(x) {
+  p <- stats::quantile(x, c(0.05, 0.5, 0.95), na.rm = TRUE)
+  sprintf("%.2f (%.2f–%.2f)", p[2], p[1], p[3])
+}
+term <- do.call(rbind, lapply(srr_run, function(s) {
+  do.call(rbind, lapply(sids, function(id) {
+    stk <- closedLoopSamMC[[s]][[id]]
+    y <- ac(dims(stk)$maxyear)
+    rp <- refpts(eqls[[s]][[id]])
+    rpi <- refpts(eqs[[id]])
+    b <- c(ssb(stk)[, y])
+    f <- c(fbar(stk)[, y])
+    data.frame(
+      Stock = labs[[id]], SRR = s,
+      Year = y,
+      `SSB/Bmsy` = q3(b / c(rp["msy", "ssb"])),
+      `F/Fmsy` = q3(f / c(rp["msy", "harvest"])),
+      `P(SSB<Blim)` = round(mean(b < c(rpi["Blim", "ssb"])), 2),
+      check.names = FALSE, stringsAsFactors = FALSE)
+  }))
+}))
+knitr::kable(term, row.names = FALSE)
+```

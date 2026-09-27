@@ -53,7 +53,7 @@ root <- data_root(start = c(clean_here, here))
 
 args <- commandArgs(trailingOnly = TRUE)
 # Funder default: om → … → paper (no shortcut / SAM).
-# Optional OEM steps: --only shortcut | --only sam
+# Optional OEM steps: --only shortcut | sam_fit | sam_loop | sam | sam_mc
 steps <- c(
   "om",      # 01.0
   "gate",    # 01.1 + 01.2
@@ -64,7 +64,7 @@ steps <- c(
   "paper",   # 04.0_paper_figures + main_traj_facet.R
   "review"   # 04.1 multi-SRR (peer review)
 )
-optional <- c("shortcut", "sam") # 02.3 eqSimErr OEM; 02.4 SAM OEM
+optional <- c("shortcut", "sam_fit", "sam_loop", "sam", "sam_mc") # 02.3 eqSimErr OEM; 02.4.1 SAM fit; 02.4.2 SAM loop; sam = both; 02.4.3 SAM iterations
 
 from <- "om"
 only <- NULL
@@ -110,9 +110,13 @@ run_step <- function(step) {
     digest  = render("03.0_digest.Rmd"),
     paper = {
       render("04.0_paper_figures.Rmd")
+      message("=== advice_catch_casestudy.R ===")
+      source(file.path(here, "scripts", "advice_catch_casestudy.R"),
+             local = new.env(parent = globalenv()))
       message("=== main_traj_facet.R ===")
-      sys.source(file.path(here, "scripts", "main_traj_facet.R"),
-                 envir = new.env(parent = globalenv()))
+      # source() (not sys.source) so ofile is set for script-path discovery
+      source(file.path(here, "scripts", "main_traj_facet.R"),
+             local = new.env(parent = globalenv()))
     },
     review  = render("04.1_multiSRR_review.Rmd"),
     stop("Unknown step: ", step,
@@ -124,8 +128,15 @@ run_step <- function(step) {
 if (!is.null(only)) {
   if (identical(only, "shortcut")) {
     render("02.3_closedLoop_shortcut.Rmd")
+  } else if (identical(only, "sam_fit")) {
+    render("02.4.1_sam.Rmd")
+  } else if (identical(only, "sam_loop")) {
+    render("02.4.2_closedLoop_sam.Rmd")
+  } else if (identical(only, "sam_mc")) {
+    render("02.4.3_closedLoop_sam_mc.Rmd")
   } else if (identical(only, "sam")) {
-    render("02.4_closedLoop_sam.Rmd")
+    render("02.4.1_sam.Rmd")
+    render("02.4.2_closedLoop_sam.Rmd")
   } else if (!only %in% steps) {
     stop("--only must be one of: ",
          paste(c(steps, optional), collapse = ", "),

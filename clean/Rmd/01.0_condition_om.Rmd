@@ -77,6 +77,7 @@ source(file.path(here, "R/constants.R"))
 source(file.path(here, "R/loadStocks.R"))
 theme_set(theme_paper())
 
+ensure_seed_inputs(root)
 stocks      = read.csv(file.path(root, "data/reference/stocks.csv"), stringsAsFactors = FALSE)
 stocks$name = factor(stocks$name, levels = unique(stocks$name))
 sids        = as.character(stocks$sid)
@@ -110,22 +111,45 @@ BH variants (`scn0`–`scn2`) are stored alongside them.
 | **scn0** | Near-linear BH: \(h = 0.999\), \(R_0\) = median recruitment when SSB \(> B_{\lim}\) |
 | **scn1** | Same as **bh1** (unconstrained BH) |
 | **scn2** | Steepness prior \(h = 0.7\) (\(CV = 0.3\)) and \(R_0\) = median recruitment above \(MSYB_{\mathrm{trigger}}\) |
+| **bhw** | Reference OM. BH with \(R_0\) equivalent to the Winker et al. (2026) segmented regression: breakpoint fixed at ICES \(B_{\lim}\), plateau \(a B_{\lim}\) as a tight lognormal \(R_0\) prior (\(CV = 0.05\)); \(h\) estimated. `msy` = equilibrium at ICES \(F_{\mathrm{MSY}}\) (curve's own maximum in `bhwR0`) |
 
 **bh1** also carries the ICES benchmarks (`addBenchmark` → `eqs`); HCR inputs
 (\(F_{\mathrm{tar}}\), \(B_{\mathrm{trigger}}\), \(B_{\lim}\)) come from there.
-The funder Operating Model for projections is **bh3**. Open- and closed-loop
-notebooks (`02.1`, `02.2`) project the six SRR branches; **scn0**–**scn2** are
-diagnostic extras.
+The reference Operating Model for projections is **bhw** (`srr_om`), replacing
+**bh3**, whose \(R_0\) prior (\(B_{\mathrm{trigger}}/B_{\lim}\), in recruit
+units) lies below the fitter's lower bound on \(R_0\), so its \(R_0\) sat at the
+10% quantile of recruitment. The other branches are kept for robustness.
 
 ```{r eqls}
-eqlsFn<-function(x, bpt, nyears=20, h=0.7, hCV=0.3, rCV=0.1) {
-  r0 = median(rec(x)[rec(x) > bpt])
-  icesdata::eql(x, model="bevholtSV", nyears=20, prior_s=h, cv_s=hCV,
-      prior_r0=r0, cv_r0=rCV)}
+# R0 prior = median recruitment when SSB > biomass threshold (scn2 text).
+# Comparing rec to Btrigger yields NA R0 when the threshold is NA/empty, and
+# ftmb2 then dies in nlminb with "NA/NaN gradient evaluation".
+eqlsFn = function(x, bpt, nyears = 20, h = 0.7, hCV = 0.3, rCV = 0.1) {
+  bpt = as.numeric(bpt)[1]
+  if (!is.finite(bpt) || bpt <= 0)
+    stop("eqlsFn: MSYBtrigger is missing or non-positive.", call. = FALSE)
+  flag = is.finite(c(ssb(x))) & c(ssb(x)) > bpt
+  r0 = median(c(rec(x))[flag], na.rm = TRUE)
+  if (!is.finite(r0) || r0 <= 0)
+    r0 = median(c(rec(x))[is.finite(c(rec(x))) & c(rec(x)) > 0], na.rm = TRUE)
+  if (!is.finite(r0) || r0 <= 0)
+    stop("eqlsFn: cannot form a finite positive R0 prior.", call. = FALSE)
+  icesdata::eql(x, model = "bevholtSV", nyears = nyears,
+                prior_s = h, cv_s = hCV,
+                prior_r0 = r0, cv_r0 = rCV)
+}
 
-eqs = mlply(sids, function(id) {
-  eqlsFn(oms[[id]], unlist(subset(sag$rfpts, sid == id)["MSYBtrigger"]))})
-names(eqs) = sids
+# Require finite ICES triggers before any SRR fit.
+rf_need = c("Blim", "MSYBtrigger")
+for (id in sids) {
+  row = subset(sag$rfpts, sid == id)
+  if (!nrow(row))
+    stop("sag$rfpts has no row for ", id, call. = FALSE)
+  miss = rf_need[!is.finite(unlist(row[1, rf_need]))]
+  if (length(miss))
+    stop("sag$rfpts for ", id, " has non-finite ",
+         paste(miss, collapse = ", "), call. = FALSE)
+}
 
 ncores = max(1L, detectCores() - 4L)
 cl = makeCluster(ncores)
@@ -196,6 +220,40 @@ eqls$scn0 = scn0
 eqls$scn1 = scn1
 eqls$scn2 = scn2
 
+# bhw: BH with R0 equivalent to the Winker et al. (2026) segmented regression
+# (breakpoint fixed at ICES Blim; plateau = a * Blim, lognormal MLE of a).
+# Steepness estimated; R0 held at the plateau by a tight lognormal prior.
+# (Winker et al. used CV 0.3 as a penalty; with that the fitted R0 drifts up to
+# ~2x the plateau for Celtic Sea cod, so it is no longer equivalent.)
+# ftmb2 bounds log R0 to the 10-90% quantiles of log recruitment.
+bhw_cv = 0.05
+winker_r0 = function(stk, blim) {
+  sr = as.FLSR(stk)
+  r  = c(rec(sr)); b = c(ssb(sr))
+  ok = is.finite(r) & is.finite(b) & r > 0 & b > 0
+  if (sum(ok) < 5L)
+    stop("winker_r0: fewer than 5 SSB-recruit pairs.", call. = FALSE)
+  a = exp(mean(log(r[ok]) - log(pmin(b[ok], blim))))
+  q = exp(quantile(log(r[ok]), c(0.1, 0.9)))
+  c(R0 = a * blim, q10 = unname(q[1]), q90 = unname(q[2]))
+}
+bhw = list()
+bhwR0 = NULL
+for (id in sids) {
+  blim = as.numeric(unlist(subset(sag$rfpts, sid == id)[, "Blim"]))[1]
+  w = winker_r0(oms[[id]], blim)
+  if (w[["R0"]] < w[["q10"]] || w[["R0"]] > w[["q90"]])
+    stop("bhw: plateau R0 for ", id, " is outside the ftmb2 bounds on R0.",
+         call. = FALSE)
+  bhw[[id]] = icesdata::eql(oms[[id]], model = "bevholtSV",
+                            prior_r0 = w[["R0"]], cv_r0 = bhw_cv)
+  bhw[[id]] = addBenchmark(bhw[[id]], sid = id, rfpts = sag$rfpts,
+                           updateRefs = TRUE)
+  bhwR0 = rbind(bhwR0, data.frame(sid = id, Blim = blim, R0_prior = w[["R0"]],
+                                  q10 = w[["q10"]], q90 = w[["q90"]]))
+}
+bhw = FLBRPs(bhw)
+
 # Installed addBenchmark rbind() renames virgin/msy to rfs/add, so  put the names back.
 restore_msy_names = function(x) {
   fix1 = function(eq) {
@@ -217,16 +275,62 @@ eqs  = restore_msy_names(eqs)
 scn0 = restore_msy_names(scn0)
 scn1 = restore_msy_names(scn1)
 scn2 = restore_msy_names(scn2)
+bhw  = restore_msy_names(bhw)
+
+bhwR0$R0_fit = sapply(bhwR0$sid, function(id)
+  c(refpts(bhw[[id]])["virgin", "rec"]))
+bhwR0$s_fit = sapply(bhwR0$sid, function(id) {
+  p = params(bhw[[id]])
+  v = c(refpts(bhw[[id]])["virgin", "ssb"])
+  r0 = c(refpts(bhw[[id]])["virgin", "rec"])
+  0.2 * v * c(p["a"]) / (c(p["b"]) + 0.2 * v) / r0
+})
+bhwR0$Fmsy_BH = sapply(bhwR0$sid, function(id)
+  c(refpts(bhw[[id]])["msy", "harvest"]))
+bhwR0$Bmsy_BH = sapply(bhwR0$sid, function(id)
+  c(refpts(bhw[[id]])["msy", "ssb"]))
+
+# Winker et al. (2026): BMSY is the equilibrium at the ICES FMSY, so the bhw
+# "msy" row is overwritten by the FMSY row (the curve's own maximum is in
+# bhwR0$Fmsy_BH / Bmsy_BH).
+msy_at_ices = function(eq) {
+  rp = refpts(eq)
+  nm = dimnames(rp)[["refpt"]]
+  if (!all(c("msy", "FMSY") %in% nm))
+    stop("msy_at_ices: refpts need 'msy' and 'FMSY' rows.", call. = FALSE)
+  rp["msy", ] = rp["FMSY", ]
+  refpts(eq) = rp
+  eq
+}
+bhw = FLBRPs(lapply(bhw, msy_at_ices))
+
 eqls[["bh1"]] = eqs
 eqls$scn0 = scn0
 eqls$scn1 = scn1
 eqls$scn2 = scn2
+eqls$bhw  = bhw
 
 dir.create(file.path(root, "data/om"), recursive = TRUE, showWarnings = FALSE)
 save(oms, stocks, sids, file = file.path(root, "data/om/oms.RData"))
 save(sag, file = file.path(root, "data/om/sag.RData"))
-save(eqls, eqs, scn0, scn1, scn2, file = file.path(root, "data/om/eqls.RData"))
+save(eqls, eqs, scn0, scn1, scn2, bhw, bhwR0,
+     file = file.path(root, "data/om/eqls.RData"))
 
+```
+
+**Table `r Tab=Tab+1; Tab`**. `bhw`: Winker-equivalent \(R_0\) prior
+(segmented-regression plateau at \(B_{\lim}\)), bounds on \(R_0\) (10–90%
+recruitment quantiles), fitted \(R_0\) and steepness, the BH curve's own
+\(F_{\mathrm{MSY}}\) and \(B_{\mathrm{MSY}}\), and \(B_{\mathrm{MSY}}\) at ICES
+\(F_{\mathrm{MSY}}\) relative to \(MSYB_{\mathrm{trigger}}\).
+
+```{r bhw-table}
+bhwTab = bhwR0
+bhwTab$Bmsy_Btrig = sapply(bhwTab$sid, function(id)
+  c(refpts(bhw[[id]])["msy", "ssb"]) /
+    as.numeric(unlist(subset(sag$rfpts, sid == id)[, "MSYBtrigger"]))[1])
+knitr::kable(bhwTab, digits = c(0, 0, 0, 0, 0, 0, 2, 3, 0, 2),
+             row.names = FALSE)
 ```
 
 

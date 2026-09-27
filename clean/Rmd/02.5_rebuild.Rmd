@@ -85,7 +85,7 @@ source(file.path(here, "R/om.R"))
 sids = as.character(stocks$sid)
 require_om_gate(root, sids)
 eqs  = eqls[["bh1"]]
-srr  = "bh3"
+srr  = srr_om
 if (!srr %in% names(closedLoop[["SRR"]]) || !srr %in% names(eqls))
   stop("SRR branch '", srr, "' missing from closedLoop or eqls")
 ar   = closedLoop[["SRR"]][[srr]]

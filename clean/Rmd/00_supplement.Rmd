@@ -1,12 +1,13 @@
 ---
 title: "Supplementary methods notebooks"
-subtitle: "Clean-tree index"
+subtitle: "Clean-tree index — contract chain and peer-review options"
 author: "Laurence Kell"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
   html_document:
     toc: true
     toc_float: true
+    number_sections: true
     theme: flatly
 ---
 
@@ -15,26 +16,176 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       error = FALSE)
 ```
 
-This supplement **is** the notebooks in this folder. Funder figures:
-[`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd) and
-`scripts/main_traj_facet.R`. Shared engine: **FLBacktest**.
+This supplement **is** the notebooks in this folder. It does not re-run
+simulations. Paths and outputs live under **`clean/`**
+(`data_root()` → `clean/data/…`). Shared engine: **FLBacktest**.
 
-| Notebook | Role |
-|----------|------|
-| [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd) | Operating Models |
-| [`01.1_lterm_eq.Rmd`](01.1_lterm_eq.Rmd) | Long-term \(F_{\mathrm{MSY}}\) gate |
-| [`01.2_dynamics.Rmd`](01.2_dynamics.Rmd) | Dynamics diagnostics |
-| [`02.1_openLoop.Rmd`](02.1_openLoop.Rmd) | Open loop (ICES \(F_{\mathrm{tar}}\) and OM \(F_{\mathrm{MSY}}\)) |
-| [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd) | Closed-loop `hcrICES` (perfect; **bh3**) |
-| [`02.3_closedLoop_shortcut.Rmd`](02.3_closedLoop_shortcut.Rmd) | Short-cut OEM (`eqSimErr`) |
-| [`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd) | SAM OEM, then SAM closed loop |
-| [`02.5_rebuild.Rmd`](02.5_rebuild.Rmd) | 20-year Future |
-| [`03.0_digest.Rmd`](03.0_digest.Rmd) | All-stock table |
-| [`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd) | Funder figures |
-| [`04.1_multiSRR_review.Rmd`](04.1_multiSRR_review.Rmd) | Peer-review SRRs |
+Knit from `clean/` with `Rscript scripts/run_pipeline.R` (see
+[`../README.md`](../README.md) and [`README.md`](README.md)).
 
-Not here: screening, TwoStocks, generic scn2, parent `06.0_report.Rmd`.
-Short-cut and SAM are off the funder knit:
-`Rscript scripts/run_pipeline.R --only shortcut` and `--only sam`.
-SAM stages via `BM_SAM_STAGE`: `fit`, then `loop`, then `srr`.
-Closed-loop multi-SRR: `BM_CLOSED_SRR=all`.
+# Funder draft vs peer-review manuscript
+
+| Deliverable | Closed-loop treatment | Where |
+|-------------|----------------------|--------|
+| Funder / contract | Perfect-information `hcrICES` on true OM SSB (**bh3**) | `02.2`, `tex/report.tex` |
+| Peer-review draft | SAM management procedure (survey OEM → SAM → forecast → HCR), all four case studies; perfect information reported as the no-assessment-error bound | `02.4.1` fit, `02.4.2` loop (`--only sam`), `scripts/manuscript_sam.R`, `tex/manuscript.tex` |
+| Peer-review robustness | SAM MP over 100 survey realisations (CV 0.3), `scn0`–`scn2` | `02.4.3` (`--only sam_mc`) |
+| Optional bound | Short-cut OEM (`eqSimErr` on SSB) | `02.3` (`--only shortcut`) |
+
+Open-loop ICES \(F_{\mathrm{tar}}\) and OM \(F_{\mathrm{MSY}}\) are no-feedback
+benchmarks in both. Multi-SRR tables for revision:
+[`04.1_multiSRR_review.Rmd`](04.1_multiSRR_review.Rmd)
+(`BM_CLOSED_SRR=all` on `02.2` for full Advice-rule coverage).
+
+# Notebooks
+
+## Operating model and gate
+
+### [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd)
+
+Load and clean WGCSE stocks; fit six SRR scenarios (`bh1`–`bh3`, `rk1`–`rk3`)
+plus diagnostic `scn0`–`scn2`; attach SAG benchmarks; seed
+`data/reference/` from the parent tree if missing (`ensure_seed_inputs()`).
+
+Writes `data/om/oms.RData`, `eqls.RData`, `sag.RData`, `recDevs.RData`.
+
+### [`01.1_lterm_eq.Rmd`](01.1_lterm_eq.Rmd)
+
+**Required** before open-/closed-loop. 50-year deterministic `fwd` at FLBRP
+\(F_{\mathrm{MSY}}\) vs `refpts` (`ltermEq` / `ltermPass`, `biology = "brp"`).
+Stops if any stock fails. `require_om_gate()` in later notebooks reads
+`data/results/01.1_lterm_eq.RData`.
+
+### [`01.2_dynamics.Rmd`](01.2_dynamics.Rmd)
+
+Dynamics diagnostics (SPR0, process error, realised status, compact
+`fwd` vs FLBRP). Writes `data/results/01.2_dynamics.RData` and
+`data/interim/01.2_dynamics/`.
+
+## Backtest
+
+### [`02.1_openLoop.Rmd`](02.1_openLoop.Rmd)
+
+Constant-\(F\) projections: published ICES \(F_{\mathrm{tar}}\) and each
+scenario's OM \(F_{\mathrm{MSY}}\) (six SRRs). No biomass feedback.
+
+Writes `data/results/02.1_openLoop.RData`.
+
+### [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd)
+
+Closed-loop `hcrICES` from 2015: perfect information (true OM SSB), residual
+replay, zero implementation error, \(\pm20\%\) TAC clause above
+\(B_{\mathrm{trigger}}\). Default OM branch **bh3**; set `BM_CLOSED_SRR=all`
+for six SRRs.
+
+Writes `data/results/02.2_closedLoop.RData`.
+
+### [`02.3_closedLoop_shortcut.Rmd`](02.3_closedLoop_shortcut.Rmd)
+
+Optional. Same HCR with `eqSimErr` observation error on SSB.
+`Rscript scripts/run_pipeline.R --only shortcut`.
+
+### [`02.4.1_sam.Rmd`](02.4.1_sam.Rmd)
+
+Optional for the funder knit. SAM OEM survey and one SAM fit per stock,
+compared with the OM; stops if a fit fails or is off scale. Check before the
+closed loop. Stocks: SAM assessments in `stocks.csv` plus Irish Sea cod
+(`sam_extra` in `R/sam_oem.R`; its ICES assessment is not SAM).
+Catch-at-age placeholders (\(\le 10^{-3}\), e.g. Celtic Sea cod ages 1–2
+before 2004) are passed to SAM as missing; ages with no catch at all keep
+them. Writes `data/results/02.4.1_sam.RData`.
+`Rscript scripts/run_pipeline.R --only sam_fit`.
+
+### [`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd)
+
+**Closed-loop arm of the peer-review manuscript.** `hcrICES` with the
+`02.4.1` OEM, refitting SAM each advice year. `BM_SAM_STAGE`: `loop`
+(default, **bh3**) or `srr` (six SRRs). Writes
+`data/results/02.4.2_closedLoop_sam.RData`.
+`Rscript scripts/run_pipeline.R --only sam_loop`.
+
+### [`02.4.3_closedLoop_sam_mc.Rmd`](02.4.3_closedLoop_sam_mc.Rmd)
+
+SAM closed loop repeated over survey realisations: 100 iterations, survey
+CV 0.3, OM SRRs `scn0`–`scn2` (overrides `BM_SAM_MC_NITS`, `BM_SAM_MC_CV`,
+`BM_SAM_MC_CORES`). Each (SRR, stock, iteration) is a single-iteration run
+on a PSOCK cluster, cached under `data/interim/02.4.3_closedLoop_sam_mc/`
+so a re-knit resumes. Writes `data/results/02.4.3_closedLoop_sam_mc.RData`.
+`Rscript scripts/run_pipeline.R --only sam_mc`.
+
+### [`02.5_rebuild.Rmd`](02.5_rebuild.Rmd)
+
+20-year Future from Historical and Advice-rule terminal states (mean
+recruitment; **bh3**). Writes `data/results/02.5_rebuild.RData`.
+
+## Digests and figures
+
+### [`03.0_digest.Rmd`](03.0_digest.Rmd)
+
+All-stock terminal summary table. Writes `data/results/03.0_digest.RData`.
+
+### [`04.0_paper_figures.Rmd`](04.0_paper_figures.Rmd)
+
+Loads saved results; short digest and `FLCore::plot` checks. Published
+facets are scripts (below), not this notebook.
+
+### [`04.1_multiSRR_review.Rmd`](04.1_multiSRR_review.Rmd)
+
+Peer-review only: stock × SRR summary from open loop (six SRRs) and whatever
+closed-loop SRRs are present. Does not edit `tex/report.tex`.
+
+# Figure scripts
+
+Run from `clean/` (also invoked by the pipeline `paper` step):
+
+| Script | Output under `clean/tex/figs/` |
+|--------|--------------------------------|
+| [`../scripts/advice_catch_casestudy.R`](../scripts/advice_catch_casestudy.R) | `advice_catch_casestudy.pdf` (+ `.png`) — ASD advice vs SAG catch |
+| [`../scripts/main_traj_facet.R`](../scripts/main_traj_facet.R) | `traj_facet.pdf` (+ `.png`) — Historical vs perfect-information Advice rule (funder); with `BM_TRAJ_MP=sam`, `traj_facet_sam.pdf` — Advice rule = SAM MP (manuscript Figure 3) |
+| [`../scripts/manuscript_sam.R`](../scripts/manuscript_sam.R) | `data/results/04.2_manuscript_sam.RData` — manuscript tables (SAM MP, perfect-information bound, 20-year rebuild); run before `BM_TRAJ_MP=sam` |
+
+Needs `data/om/sag.RData` (and network for ASD) for the advice–catch figure.
+
+# Knit order
+
+```
+01.0_condition_om.Rmd
+        ├── 01.1_lterm_eq.Rmd          (required gate)
+        └── 01.2_dynamics.Rmd          (required diagnostics)
+02.1_openLoop.Rmd
+02.2_closedLoop.Rmd                    (funder closed loop; bh3)
+        └── 02.5_rebuild.Rmd
+03.0_digest.Rmd
+04.0_paper_figures.Rmd
+        + advice_catch_casestudy.R
+        + main_traj_facet.R
+04.1_multiSRR_review.Rmd               (peer-review; optional)
+
+Optional: 02.3_closedLoop_shortcut.Rmd
+
+Manuscript (SAM MP):
+02.4.1_sam.Rmd                         (check fits first)
+        └── 02.4.2_closedLoop_sam.Rmd
+                └── scripts/manuscript_sam.R
+                        └── BM_TRAJ_MP=sam scripts/main_traj_facet.R
+02.4.3_closedLoop_sam_mc.Rmd           (observation-error iterations)
+```
+
+`01.1` is a hard stop for `02.1` / `02.2` via `require_om_gate()`.
+Knit `00_supplement.Rmd` anytime; it is an index.
+
+# Not in this tree
+
+Parent screening-of-six, `01.cod_*`, `06.1_TwoStocks`, `06.2_generic`,
+`06.0_report.Rmd` (replaced by `04.0` + figure scripts), and the parent
+`R/plot_theme.R` kitchen-sink. LaTeX: `clean/tex/report.tex` (funder),
+`clean/tex/manuscript.tex` (peer-review assembly).
+
+# Notes
+
+- **FLBacktest** — `hcrICES`, `fwdFbar`, `load_om`, `require_om_gate`,
+  `ltermEq` / `ltermPass`, `project_hcr`, `years_to`, …
+- **icesdata** — `eql`, `addBenchmark`, `getSAG`, …
+- Application: `R/paths.R`, `R/constants.R`, `R/om.R`, `R/loadStocks.R`
+- Code: [github.com/laurieKell/backtest-ices](https://github.com/laurieKell/backtest-ices);
+  engine: [github.com/laurieKell/FLBacktest](https://github.com/laurieKell/FLBacktest)

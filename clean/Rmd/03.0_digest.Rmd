@@ -45,7 +45,7 @@ load(file.path(root, "data/results/02.1_openLoop.RData"))
 load(file.path(root, "data/results/02.2_closedLoop.RData"))
 load(file.path(root, "data/results/01.1_lterm_eq.RData"))
 eqs = eqls[["bh1"]]
-srr = "bh3"
+srr = srr_om
 if (!srr %in% names(openLoop[["SRR"]]) || !srr %in% names(closedLoop[["SRR"]]))
   stop("openLoop/closedLoop SRR has no '", srr, "' — knit 02.1 and 04.2.",
        call. = FALSE)

@@ -1,0 +1,221 @@
+---
+title: "SAM fit to the Operating Model"
+subtitle: "Observation error model check before the SAM closed loop"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+Builds the age-structured survey from Operating Model numbers and fits SAM
+once per SAM stock, then compares the fit with the Operating Model. Check
+this notebook before running the HCR in
+[`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd), which reuses the
+survey index saved here. The knit stops if a fit fails or is off the
+Operating Model scale.
+
+Stocks are the SAM assessments in `stocks.csv` plus `sam_extra` (Irish Sea
+cod), whose ICES assessment is not SAM but which uses the same management
+procedure so all four case studies are comparable. NEA mackerel is not
+included.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"),                 recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),             recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.4.1_sam"),  recursive=TRUE, showWarnings=FALSE)
+
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.4.1_sam/"),
+  fig.path  = file.path(here, "tex/figs", "02.4.1_sam-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+```
+
+```{r libs}
+source(file.path(here, "R/sam_oem.R"))
+sam_libs()
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(reshape2)
+  library(FLasher)
+  library(FLBacktest)
+  library(FLfse)
+  library(stockassessment)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
+options(FLfse.sam.q = 1)
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+if (!exists("eqs"))
+  eqs <- eqls[["bh1"]]
+
+sids <- sam_sids(oms, stocks)
+require_om_gate(root, sids)
+
+om <- oms[sids]
+nits <- 1L
+indexCv <- 0.1
+```
+
+SAM stocks: `r paste(sids, collapse = ", ")`.
+
+# Observation model
+
+Ages exclude recruitment and the plus group. The stored index is a
+catchability of 1 times lognormal noise (`indexCv` = `r indexCv`). SAM is
+started at that catchability (`options(FLfse.sam.q = 1)`). In the closed loop
+`hcrICES` multiplies the stored index by Operating Model `stock.n` each
+advice year; the one-shot fit below applies that product once, over the
+whole assessment, and calls `FLfse::FLR_SAM`. Helpers are in
+`R/sam_oem.R`.
+
+Catch-at-age at or below `r sam_catch_tol` is a placeholder for a missing
+age (e.g. Celtic Sea cod ages 1–2 before 2004) and is passed to SAM as `NA`.
+Read as a real catch, SAM estimates \(F \approx 0\) at those ages and biases
+Fbar and SSB. Ages with no catch in any year (haddock age 0, where the
+Operating Model F is 0) keep the placeholder: near-zero catch is correct
+there, and the forecast inside `hcrICES` needs finite catches. The Operating
+Model is not changed.
+
+**Table `r Tab=Tab+1; Tab`**. Catch-at-age cells passed to SAM as missing.
+
+```{r catch-na-table}
+naTab <- do.call(rbind, lapply(sids, function(id) {
+  cn <- catch.n(om[[id]])
+  bad <- sam_catch_bad(om[[id]])
+  if (!any(bad))
+    return(data.frame(sid = id, ages = "", years = "", cells = 0L))
+  ages <- dimnames(cn)$age[apply(bad, 1, any)]
+  yrs <- as.integer(dimnames(cn)$year[apply(bad, 2, any)])
+  data.frame(sid = id, ages = paste(ages, collapse = ", "),
+             years = paste(range(yrs), collapse = "–"), cells = sum(bad))
+}))
+knitr::kable(naTab, row.names = FALSE,
+             col.names = c("SID", "Ages", "Years", "Cells"))
+```
+
+# SAM fit to the Operating Model
+
+```{r sam-fit}
+set.seed(2404L)
+oem <- FLIndices(lapply(om, sam_oem, indexCv = indexCv, nits = nits))
+names(oem) <- sids
+
+fit_one <- function(id) {
+  stk <- om[[id]]
+  cn <- catch.n(stk)
+  yrs_all <- dimnames(cn)$year
+  ok <- vapply(yrs_all, function(y) {
+    x <- c(cn[, y])
+    any(is.finite(x) & x > sam_catch_tol)
+  }, logical(1))
+  if (!any(ok))
+    stop("No catch-at-age for ", id, call. = FALSE)
+  yrs <- dimnames(cn)$year[ok]
+  stk <- window(stk, start = as.numeric(yrs[1]), end = as.numeric(yrs[length(yrs)]))
+  idx <- sam_observe(stk, oem[[id]])
+  idx <- window(idx, start = dims(stk)$minyear, end = dims(stk)$maxyear)
+  fit <- FLfse::FLR_SAM(sam_catch_na(stk), idx, NA_rm = TRUE)
+  if (inherits(fit, "error") || inherits(fit, "try-error"))
+    stop("FLR_SAM failed for ", id, call. = FALSE)
+  hat <- FLfse::SAM2FLStock(fit)
+  if (!is(hat, "FLStock"))
+    stop("SAM2FLStock did not return an FLStock for ", id, call. = FALSE)
+  both <- as.character(intersect(dimnames(ssb(stk))$year, dimnames(ssb(hat))$year))
+  if (length(both) < 5L)
+    stop("SAM fit for ", id, " overlaps the Operating Model in fewer than 5 years.",
+         call. = FALSE)
+  tail_yrs <- tail(both, 10)
+  ssb_r <- median(c(ssb(hat)[, tail_yrs] / ssb(stk)[, tail_yrs]), na.rm = TRUE)
+  f_r <- median(c(fbar(hat)[, tail_yrs] / fbar(stk)[, tail_yrs]), na.rm = TRUE)
+  conv <- if (is.null(fit$opt)) NA_integer_ else unname(fit$opt$convergence)
+  if (!is.finite(ssb_r) || !is.finite(f_r) ||
+      ssb_r < 0.5 || ssb_r > 2 || f_r < 0.5 || f_r > 2)
+    stop("SAM fit for ", id, " is off the Operating Model scale (SSB ",
+         signif(ssb_r, 3), ", F ", signif(f_r, 3),
+         "). convergence=", conv, ".", call. = FALSE)
+  list(stock = hat, ratio = c(ssb = ssb_r, f = f_r, conv = conv))
+}
+
+fits <- lapply(sids, function(id) {
+  message("SAM fit: ", id)
+  tryCatch(
+    fit_one(id),
+    error = function(e)
+      stop("SAM OEM fit failed for ", id, ": ", conditionMessage(e),
+           call. = FALSE))
+})
+names(fits) <- sids
+samFit <- FLStocks(lapply(fits, `[[`, "stock"))
+samRatio <- do.call(rbind, lapply(sids, function(id) {
+  data.frame(sid = id,
+             ssb = unname(fits[[id]]$ratio["ssb"]),
+             f = unname(fits[[id]]$ratio["f"]),
+             conv = unname(fits[[id]]$ratio["conv"]),
+             stringsAsFactors = FALSE)
+}))
+save(oem, samFit, samRatio, sids, indexCv, nits,
+     file = file.path(root, "data/results/02.4.1_sam.RData"))
+```
+
+**Table `r Tab=Tab+1; Tab`**. Median SAM / Operating Model over the last 10
+overlapping years. The fit stops if either ratio is outside 0.5–2.
+Convergence 0 is a completed `sam.fit`.
+
+```{r sam-fit-table}
+knitr::kable(
+  cbind(name = as.character(stocks$name[match(samRatio$sid, stocks$sid)]),
+        samRatio),
+  digits = 3, row.names = FALSE,
+  col.names = c("Stock", "SID", "SSB ratio", "F ratio", "Convergence"))
+```
+
+# Trajectories
+
+Same layout as [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd): \(F\), SSB, Rec,
+Catch relative to the Historical mean; facet quantity \(\times\) stock;
+ICES / OM reference points; colour = Historical vs one-shot SAM fit.
+
+```{r traj-fit-plot, fig.height=9, fig.width=11}
+labs = setNames(as.character(stocks$name[match(sids, stocks$sid)]), sids)
+eql_ref = if (srr_om %in% names(eqls)) eqls[[srr_om]] else eqls[["bh3"]]
+print(plot_hcr_vs_hist(
+  om, samFit, eqs, eql_ref,
+  sids = sids, labels = labs, start_ar = 2015L,
+  advice_lab = "SAM fit"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. One-shot SAM fit vs historical Operating
+Model `FLStock` (survey = OM numbers \(\times\) lognormal noise).

@@ -12,7 +12,7 @@ case_labs=c(
   "cod.27.7a"      = "Irish Sea cod",
   "whg.27.7b-ce-k" = "Celtic Sea whiting")
 
-srr_om    ="bh3"
+srr_om    ="bhw"
 startYr_ar=2015L
 
 # ICES TAC stability clause (hcrICES bndTac / bndWhen).

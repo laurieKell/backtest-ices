@@ -1,0 +1,208 @@
+---
+title: "SAM closed loop"
+subtitle: "hcrICES with a SAM assessment"
+author: "Laurence Kell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+---
+
+# Purpose
+
+Closed-loop ICES HCR with SAM as the assessment. This is not the funder
+draft (`02.2` is perfect information; `02.3` is the EqSim short-cut OEM).
+The survey index and SAM stocks come from
+[`02.4.1_sam.Rmd`](02.4.1_sam.Rmd); knit and check that first.
+
+The OEM enters `hcrICES` as `err` (an `FLIndex`); each advice year refits SAM
+on the index, from 2015, `implErr = 0`. SRRs are selected by
+`BM_SAM_STAGE`:
+
+1. **loop** (default) — reference OM only (`srr_om`, **bhw**).
+2. **srr** — `bh1`, `bh2`, `bh3`, `rk1`, `rk2`, `rk3`.
+
+HCR parameters stay on `eqs` (`eqls[["bh1"]]`). The TAC stability clause
+matches `02.2`. As in `02.4.1`, catch-at-age placeholders (at or below
+`sam_catch_tol`) are passed to SAM as `NA`; the Operating Model's historical
+values are restored in the saved runs.
+
+```{r knitr, echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+source(if (file.exists("../R/paths.R")) "../R/paths.R" else "R/paths.R")
+root <- data_root()
+here <- clean_root()
+
+dir.create(file.path(here, "tex/figs"),                           recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(root, "data/results"),                       recursive=TRUE, showWarnings=FALSE)
+dir.create(file.path(here, "Rmd/cache", "02.4.2_closedLoop_sam"), recursive=TRUE, showWarnings=FALSE)
+
+# knitr is already loaded by rmarkdown::render; do not library() a second copy.
+if (!"knitr" %in% loadedNamespaces())
+  suppressPackageStartupMessages(library(knitr))
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  error     = FALSE,
+  cache     = FALSE,
+  cache.path= file.path(here, "Rmd/cache", "02.4.2_closedLoop_sam/"),
+  fig.path  = file.path(here, "tex/figs", "02.4.2_closedLoop_sam-"),
+  fig.width = 9,
+  fig.height= 5,
+  dev       ="png")
+
+Fig=0
+Tab=0
+
+stage <- Sys.getenv("BM_SAM_STAGE", unset = "loop")
+stage <- match.arg(stage, c("loop", "srr"))
+```
+
+```{r libs}
+source(file.path(here, "R/sam_oem.R"))
+sam_libs()
+suppressPackageStartupMessages({
+  library(FLCore)
+  library(ggplot2)
+  library(FLBRP)
+  library(icesdata)
+  library(plyr)
+  library(reshape2)
+  library(FLasher)
+  library(FLBacktest)
+  library(FLfse)
+  library(stockassessment)
+})
+source(file.path(here, "R/constants.R"))
+source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
+options(FLfse.sam.q = 1)
+theme_set(theme_paper())
+```
+
+```{r load-om}
+load(file.path(root, "data/om/oms.RData"))
+load(file.path(root, "data/om/eqls.RData"))
+
+srr6 <- c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3")
+miss <- setdiff(srr6, names(eqls))
+if (length(miss))
+  stop("eqls is missing ", paste(miss, collapse = ", "),
+       " — knit 01.0_condition_om.Rmd first.", call. = FALSE)
+if (!exists("eqs"))
+  eqs <- eqls[["bh1"]]
+
+samFile <- file.path(root, "data/results/02.4.1_sam.RData")
+if (!file.exists(samFile))
+  stop("Missing ", samFile, " — knit 02.4.1_sam.Rmd first.", call. = FALSE)
+samEnv <- new.env()
+load(samFile, envir = samEnv)
+for (v in c("oem", "sids", "indexCv", "nits"))
+  if (!exists(v, envir = samEnv, inherits = FALSE))
+    stop(samFile, " has no '", v, "' — re-knit 02.4.1_sam.Rmd.", call. = FALSE)
+oem <- samEnv$oem
+sids <- samEnv$sids
+indexCv <- samEnv$indexCv
+nits <- samEnv$nits
+
+miss <- setdiff(sids, names(oms))
+if (length(miss))
+  stop("SAM stocks from 02.4.1 are not in oms: ",
+       paste(miss, collapse = ", "), call. = FALSE)
+if (!identical(sort(names(oem)), sort(sids)))
+  stop("02.4.1_sam.RData: oem stocks do not match sids — re-knit 02.4.1.",
+       call. = FALSE)
+require_om_gate(root, sids)
+
+om <- oms[sids]
+startYr <- setNames(rep(2015L, length(sids)), sids)
+endYr <- setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+too_short <- names(endYr)[endYr < startYr]
+if (length(too_short))
+  stop("Terminal year is before 2015 for: ",
+       paste(too_short, collapse = ", "), call. = FALSE)
+
+srr_run <- switch(stage,
+  loop = srr_om,
+  srr  = srr6)
+```
+
+Stage: **`r stage`** (`r paste(srr_run, collapse = ", ")`). SAM stocks:
+`r paste(sids, collapse = ", ")`. Survey `indexCv` = `r indexCv`.
+
+# Closed loop
+
+```{r scenario-hcr}
+srDev <- lapply(eqls[srr_run], function(eq) FLQuants(lapply(eq[sids], srResiduals)))
+bndTac <- hcr_tac_bounds()
+bndWhen <- hcr_tac_bnd_when()
+# sam.fit is run here, not on a cluster: shipping FLIndex to a worker
+# has produced non-finite optim failures that do not occur in-process.
+closedLoopSam <- list()
+for (nm in srr_run) {
+  runs <- setNames(vector("list", length(sids)), sids)
+  for (id in sids) {
+    message("SAM loop ", nm, " ", id)
+    set.seed(1000L + match(id, sids))
+    stk <- om[[id]]
+    if (nits > 1L && dims(stk)$iter == 1L)
+      stk <- propagate(stk, nits)
+    idx <- sam_prime(stk, oem[[id]], start = startYr[id], lag = 1L)
+    # hcrICES fits SAM on the stock it projects, so placeholders are set to NA
+    # there and the historical OM values put back after the loop. Projection
+    # years must keep finite catch.n: fwd derives the discard ratio from it.
+    res <- tryCatch(
+      hcrICES(sam_catch_na(stk, end = startYr[id]), eql = eqls[[nm]][[id]],
+              sr_deviances = srDev[[nm]][[id]],
+              params = hcrParams(eqs[[id]]),
+              start = startYr[id], end = endYr[id],
+              lag = 1, interval = 1,
+              err = idx, implErr = 0,
+              bndTac = bndTac, bndWhen = bndWhen,
+              verbose = TRUE)[[1]],
+      error = function(e)
+        stop(nm, " / ", id, ": ", conditionMessage(e), call. = FALSE))
+    pre <- ac(dims(stk)$minyear:startYr[id])
+    catch.n(res)[, pre] <- catch.n(stk)[, pre]
+    if (any(is.na(catch.n(res))))
+      stop(nm, " / ", id, ": NA catch.n left in projected years.", call. = FALSE)
+    runs[[id]] <- res
+  }
+  closedLoopSam[[nm]] <- FLStocks(runs)
+}
+
+save(closedLoopSam, sids, srr_run, nits, indexCv, startYr, endYr, stage,
+     file = file.path(root, "data/results/02.4.2_closedLoop_sam.RData"))
+```
+
+# Trajectories
+
+Same layout as `02.2` / `02.3`: Historical vs Advice rule (SAM MP), metrics
+relative to Historical mean, facet quantity \(\times\) stock.
+
+```{r traj-plot, fig.height=9, fig.width=11}
+labs = setNames(as.character(stocks$name[match(sids, stocks$sid)]), sids)
+srr_plot = if (srr_om %in% names(closedLoopSam)) srr_om else names(closedLoopSam)[1]
+print(plot_hcr_vs_hist(
+  om, closedLoopSam[[srr_plot]], eqs, eqls[[srr_plot]],
+  sids = sids, labels = labs, start_ar = 2015L,
+  advice_lab = "Advice rule"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. SAM closed loop (`r srr_plot`) vs
+historical `FLStock`.
+
+```{r traj-plot-srr, fig.height=9, fig.width=11, eval = length(closedLoopSam) > 1L}
+print(plot_hcr_vs_hist(
+  om, closedLoopSam, eqs, eqls[names(closedLoopSam)],
+  sids = sids, labels = labs, start_ar = 2015L))
+```
+
+```{r traj-srr-caption, results="asis", eval = length(closedLoopSam) > 1L}
+Fig <- Fig + 1
+cat("\n\n**Figure ", Fig,
+    "**. Same contrast with one Advice-rule line per SRR.\n\n", sep = "")
+```

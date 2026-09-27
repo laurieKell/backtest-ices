@@ -14,8 +14,8 @@ output:
 # Purpose
 
 **Methods — Benchmark projections** (`tex/project-markup.tex`): historical
-open-loop `fwd` from 1990 (or two years after the first assessment year if later)
-to the terminal year, compared with the realised assessment.
+open-loop `fwd` from 2015 (`startYr_ar`, the closed-loop HCR start) to the
+terminal year, compared with the realised assessment.
 
 Two constant-$F$ arms are run for each stock and each OM / SRR scenario in
 `eqls`:
@@ -30,7 +30,7 @@ Two constant-$F$ arms are run for each stock and each OM / SRR scenario in
 Same Operating Models as [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd),
 built in [`01.0_condition_om.Rmd`](01.0_condition_om.Rmd) (`oms`, `eqls`).
 The only difference from the closed loop is the harvest policy: constant $F$
-from 1990 here, ICES HCR from 2015 there. Both start from the historical
+here, ICES HCR there, both from 2015 and both starting from the historical
 assessment (`oms`).
 
 | Uncertainty | Operating Model | `fwd` residuals | Object |
@@ -86,6 +86,7 @@ suppressPackageStartupMessages({
 source(file.path(here, "R/constants.R"))
 source(file.path(here, "R/loadStocks.R"))
 source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
 theme_set(theme_paper())
 ```
 
@@ -107,18 +108,21 @@ recDev = FLQuants(lapply(oms, function(x) {
   r = rec(x)
   r %/% exp(mean(log(c(r)), na.rm = TRUE))
 }))
-startYr = setNames(vapply(sids, function(id)
-  openloop_start(om[[id]]), integer(1L)), sids)
+startYr = setNames(rep(startYr_ar, length(sids)), sids)
 endYr   = setNames(sapply(om, function(x) dims(x)$maxyear), names(om))
+too_short = sids[sapply(om[sids], function(x)
+  dims(x)$minyear >= startYr_ar || dims(x)$maxyear < startYr_ar)]
+if (length(too_short))
+  stop("Open-loop start ", startYr_ar, " is outside the assessment years for: ",
+       paste(too_short, collapse = ", "), call. = FALSE)
 ```
 
 # Open-loop `fwd`
 
 Two constant-$F$ benchmarks on the historical assessment Operating Models
 (`oms`), all SRR scenarios in `eqls`. Each `fwd` is
-`FLStocks(foreach(id = sids))`. Simulations start in 1990 from `oms` where
-the assessment allows, or in the second year after `minyear` if the series
-begins after 1990.
+`FLStocks(foreach(id = sids))`. Simulations start in 2015 (`startYr_ar`),
+the same year as the closed-loop HCR runs.
 
 **Saved object** (`data/results/02.1_openLoop.RData`):
 
@@ -147,8 +151,12 @@ tryCatch({
   scen2      = list()
   scen_om    = list()
   scen2_om   = list()
-  # Six SRR paper branches only (not scn0–scn2 diagnostics).
-  srr_run = intersect(c("bh1", "bh2", "bh3", "rk1", "rk2", "rk3"), names(eqls))
+  # Reference OM (srr_om) plus the six SRR robustness branches (not scn0–scn2).
+  srr_run = intersect(unique(c(srr_om, "bh1", "bh2", "bh3", "rk1", "rk2", "rk3")),
+                      names(eqls))
+  if (!srr_om %in% srr_run)
+    stop("eqls has no reference OM '", srr_om, "' — knit 01.0 first.",
+         call. = FALSE)
   for (nm in srr_run) {
     clusterExport(cl, "nm", envir = environment())
 
@@ -203,3 +211,26 @@ openLoop = list(
 save(openLoop, startYr, endYr,
      file = file.path(root, "data/results/02.1_openLoop.RData"))
 ```
+
+# Trajectories
+
+Historical vs the two open-loop arms for \(F\), recruitment, SSB and catch,
+laid out as in [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd). Each series is
+divided by its Historical mean (plotted window). Facets: quantity \(\times\)
+stock. Horizontal line at 1; ICES / OM reference points on the same scale.
+Vertical dotted line: open-loop start (`r startYr_ar`).
+
+```{r traj-plot, fig.height=9, fig.width=11}
+labs = setNames(as.character(stocks$name), as.character(stocks$sid))
+srr_plot = if (srr_om %in% names(openLoop[["SRR"]])) srr_om else
+  names(openLoop[["SRR"]])[1]
+print(plot_hcr_vs_hist(
+  om, list("ICES Ftar" = openLoop[["SRR"]][[srr_plot]]), eqs,
+  list("ICES Ftar" = eqls[[srr_plot]]),
+  sids = sids, labels = labs, start_ar = startYr_ar, arm_fmt = "%s"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Open-loop constant \(F\) at ICES
+\(F_{\mathrm{tar}}\) (`r srr_plot`) vs historical `FLStock`. On the reference
+OM (`bhw`) OM \(F_{\mathrm{MSY}}\) is the ICES \(F_{\mathrm{MSY}}\), so the
+OM \(F_{\mathrm{MSY}}\) arm is the same run and is not drawn.

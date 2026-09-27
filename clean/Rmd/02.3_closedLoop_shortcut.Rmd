@@ -17,7 +17,7 @@ Same historical closed-loop ICES HCR as
 [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd) (perfect information), but with a
 **short-cut** observation-error model: multiplicative SSB assessment error from
 `FLBacktest::eqSimErr`. Full SAM assessment OEM is
-[`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).
+[`02.4.1_sam.Rmd`](02.4.1_sam.Rmd) / [`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd).
 
 Default Operating Model SRR is **bh3** (`BM_CLOSED_SRR`, same as `02.2`).
 HCR parameters stay on `eqs` (`eqls[["bh1"]]`). TAC stability clause matches
@@ -73,6 +73,7 @@ suppressPackageStartupMessages({
 
 source(file.path(here, "R/constants.R"))
 source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
 theme_set(theme_paper())
 ```
 
@@ -176,5 +177,37 @@ save(closedLoopShortcut,
      file = file.path(root, "data/results/02.3_closedLoop_shortcut.RData"))
 ```
 
+# Trajectories
+
+Historical vs Advice rule (EqSim short-cut; median over iterations). Each
+metric is scaled by its Historical mean; facet by quantity \(\times\) stock
+(shared relative \(y\)-scale).
+
+```{r traj-plot, fig.height=9, fig.width=11}
+labs = setNames(as.character(stocks$name), as.character(stocks$sid))
+srr_plot = if (srr_om %in% names(closedLoopShortcut[["SRR"]])) srr_om else
+  names(closedLoopShortcut[["SRR"]])[1]
+print(plot_hcr_vs_hist(
+  om, closedLoopShortcut[["SRR"]][[srr_plot]], eqs, eqls[[srr_plot]],
+  sids = sids, labels = labs, start_ar = 2015L,
+  advice_lab = "Advice rule"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Short-cut closed loop (`r srr_plot`,
+median of `r nits` iterations) vs historical `FLStock`.
+
+```{r traj-plot-srr, fig.height=9, fig.width=11, eval = length(closedLoopShortcut[["SRR"]]) > 1L}
+print(plot_hcr_vs_hist(
+  om, closedLoopShortcut[["SRR"]], eqs,
+  eqls[names(closedLoopShortcut[["SRR"]])],
+  sids = sids, labels = labs, start_ar = 2015L))
+```
+
+```{r traj-srr-caption, results='asis', eval = length(closedLoopShortcut[["SRR"]]) > 1L}
+Fig <- Fig + 1
+cat("\n\n**Figure ", Fig,
+    "**. Short-cut Advice rule by SRR (medians).\n\n", sep = "")
+```
+
 Perfect-information counterpart: [`02.2_closedLoop.Rmd`](02.2_closedLoop.Rmd).
-SAM OEM: [`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).
+SAM OEM: [`02.4.1_sam.Rmd`](02.4.1_sam.Rmd) / [`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd).

@@ -32,7 +32,7 @@ that equilibrium. Set `BM_CLOSED_SRR=all` to expand the same HCR loop across
 `bh1`–`bh3` / `rk1`–`rk3` (still reusing each branch's recruitment residuals).
 Short-cut assessment error and SAM sit downstream:
 [`02.3_closedLoop_shortcut.Rmd`](02.3_closedLoop_shortcut.Rmd),
-[`02.4_closedLoop_sam.Rmd`](02.4_closedLoop_sam.Rmd).
+[`02.4.1_sam.Rmd`](02.4.1_sam.Rmd) / [`02.4.2_closedLoop_sam.Rmd`](02.4.2_closedLoop_sam.Rmd).
 
 | Layer | What varies | Default funder run |
 |-------|-------------|--------------------|
@@ -94,6 +94,7 @@ suppressPackageStartupMessages({
 
 source(file.path(here, "R/constants.R"))
 source(file.path(here, "R/om.R"))
+source(file.path(here, "R/plot_traj.R"))
 theme_set(theme_paper())
 ```
 
@@ -177,6 +178,39 @@ closedLoop = list("SRR" = scen2, bndTac = bndTac, bndWhen = bndWhen,
                   srr_run = srr_run)
 
 save(closedLoop, file=file.path(root, "data/results/02.2_closedLoop.RData"))
+```
+
+# Trajectories
+
+Historical vs Advice rule for \(F\), recruitment, SSB and catch. Each
+series is divided by its Historical mean (plotted window); panels share
+a relative \(y\)-scale. Facets: quantity \(\times\) stock. Horizontal
+line at 1; ICES / OM reference points on the same scale. Vertical dotted
+line: HCR start (2015).
+
+```{r traj-plot, fig.height=9, fig.width=11}
+labs = setNames(as.character(stocks$name), as.character(stocks$sid))
+srr_plot = if (srr_om %in% names(closedLoop[["SRR"]])) srr_om else
+  names(closedLoop[["SRR"]])[1]
+print(plot_hcr_vs_hist(
+  om, closedLoop[["SRR"]][[srr_plot]], eqs, eqls[[srr_plot]],
+  sids = sids, labels = labs, start_ar = 2015L,
+  advice_lab = "Advice rule"))
+```
+
+**Figure `r Fig = Fig + 1; Fig`**. Perfect-information closed loop
+(`r srr_plot`) vs historical `FLStock`.
+
+```{r traj-plot-srr, fig.height=9, fig.width=11, eval = length(closedLoop[["SRR"]]) > 1L}
+print(plot_hcr_vs_hist(
+  om, closedLoop[["SRR"]], eqs, eqls[names(closedLoop[["SRR"]])],
+  sids = sids, labels = labs, start_ar = 2015L))
+```
+
+```{r traj-srr-caption, results='asis', eval = length(closedLoop[["SRR"]]) > 1L}
+Fig <- Fig + 1
+cat("\n\n**Figure ", Fig,
+    "**. Same contrast with one Advice-rule line per SRR.\n\n", sep = "")
 ```
 
 Comparison of historical, \(F_{\mathrm{tar}}\) and the HCR, time below

@@ -16,16 +16,19 @@ It does **not** replace `C:\active\blueMarine`. Parent notebooks, `tex/`, and
    installed 2.6.32.9004; do not load `ggplotFL` here.
 6. Minimise helpers: no `style_traj` / `share_facet_y` / `theme_bluemarine`.
 
-SAM-MP is [`Rmd/02.4_closedLoop_sam.Rmd`](Rmd/02.4_closedLoop_sam.Rmd);
-short-cut OEM is [`Rmd/02.3_closedLoop_shortcut.Rmd`](Rmd/02.3_closedLoop_shortcut.Rmd).
-Neither is in the default funder knit. SAM stages, via `BM_SAM_STAGE`:
+SAM-MP is two notebooks; short-cut OEM is
+[`Rmd/02.3_closedLoop_shortcut.Rmd`](Rmd/02.3_closedLoop_shortcut.Rmd).
+Neither is in the default funder knit.
 
-1. `fit` (default) — one SAM fit per SAM stock on an OEM survey.
-2. `loop` — `hcrICES` with that OEM, **bh3** only.
-3. `srr` — the same loop for all six SRRs.
+1. [`Rmd/02.4.1_sam.Rmd`](Rmd/02.4.1_sam.Rmd) — OEM survey and one SAM fit
+   per SAM stock, compared with the OM. Check this first.
+2. [`Rmd/02.4.2_closedLoop_sam.Rmd`](Rmd/02.4.2_closedLoop_sam.Rmd) —
+   `hcrICES` with that OEM; `BM_SAM_STAGE=loop` (default, **bh3**) or `srr`
+   (all six SRRs).
 
 Short-cut: `Rscript scripts/run_pipeline.R --only shortcut`
-(`eqSimErr` SSB error). SAM: `--only sam`.
+(`eqSimErr` SSB error). SAM: `--only sam_fit`, then `--only sam_loop`
+(`--only sam` runs both).
 
 ## Paths
 
@@ -53,10 +56,11 @@ clean/
   data/              reference, WGCSE, om, results (local to clean/)
   Rmd/               contract + paper chain only
   scripts/run_pipeline.R
-  scripts/main_traj_facet.R      published traj_facet.pdf
+  scripts/advice_catch_casestudy.R   ASD vs SAG catch figure
+  scripts/main_traj_facet.R          published traj_facet.pdf
   scripts/compute_openloop_metrics.R
   scripts/metrics_backtest_window.R
-  tex/               report, abstract, supplementary, refs (copied)
+  tex/               report, manuscript, abstract, supplementary, refs
 ```
 
 ## Knit
@@ -78,10 +82,12 @@ Rscript scripts/run_pipeline.R --from paper    # figures only
 | closed | `02.2_closedLoop.Rmd` | `hcrICES` perfect info from 2015 (**bh3**; `BM_CLOSED_SRR=all` for six) |
 | rebuild | `02.5_rebuild.Rmd` | 20-year Future, `bh3` |
 | digest | `03.0_digest.Rmd` | All-stock table |
-| paper | `04.0_paper_figures.Rmd` + `main_traj_facet.R` | Funder figures |
+| paper | `04.0_paper_figures.Rmd` + `advice_catch_casestudy.R` + `main_traj_facet.R` | Funder figures |
 | review | `04.1_multiSRR_review.Rmd` | Peer-review SRR panel |
 | `--only shortcut` | `02.3_closedLoop_shortcut.Rmd` | EqSim short-cut OEM |
-| `--only sam` | `02.4_closedLoop_sam.Rmd` | SAM OEM / closed loop |
+| `--only sam_fit` | `02.4.1_sam.Rmd` | SAM fit to the OM (check before loop) |
+| `--only sam_loop` | `02.4.2_closedLoop_sam.Rmd` | SAM closed loop |
+| `--only sam` | both of the above | |
 
 Funder draft stays **bh3** / perfect information. Multi-SRR open loop is always
 run; multi-SRR closed loop needs `BM_CLOSED_SRR=all` before `closed` / `review`.
@@ -100,8 +106,12 @@ cd tex
 xelatex report.tex && bibtex report && xelatex report.tex && xelatex report.tex
 ```
 
-`report.tex` expects `figs/traj_facet.pdf` and
-`figs/advice_catch_casestudy.pdf`. After `main_traj_facet.R`, copy
-`tex/figs/traj_facet.pdf` next to the `.tex` (already under `clean/tex/figs/`).
-If `advice_catch_casestudy.pdf` is still only on the parent, copy it from
-`../tex/figs/` or drop that `\includegraphics` until regenerated.
+`report.tex` / `manuscript.tex` expect `figs/traj_facet.pdf` and
+`figs/advice_catch_casestudy.pdf` under `clean/tex/figs/`. Both are written
+by the paper pipeline step (`scripts/advice_catch_casestudy.R`,
+`scripts/main_traj_facet.R`). Regenerate alone with:
+
+```bash
+Rscript scripts/advice_catch_casestudy.R   # needs ASD network + sag.RData
+Rscript scripts/main_traj_facet.R
+```

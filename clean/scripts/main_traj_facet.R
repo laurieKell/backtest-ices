@@ -14,19 +14,38 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
-file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-script_dir <- if (length(file_arg)) {
-  dirname(normalizePath(sub("^--file=", "", file_arg), winslash = "/"))
-} else if (file.exists("scripts/main_traj_facet.R")) {
-  normalizePath("scripts", winslash = "/")
-} else {
-  normalizePath(".", winslash = "/")
-}
+# Locate this script via sys.source() ofile (pipeline) or Rscript --file=.
+# Prefer an ofile / --file that is actually this script — do not use getwd()
+# alone (RStudio cwd may be unrelated, e.g. OneDrive).
+.script_name <- "main_traj_facet.R"
+.script_path <- local({
+  for (i in rev(seq_len(sys.nframe()))) {
+    ofile <- sys.frame(i)$ofile
+    if (!is.null(ofile) && nzchar(ofile) &&
+        identical(basename(ofile), .script_name) && file.exists(ofile))
+      return(normalizePath(ofile, winslash = "/", mustWork = TRUE))
+  }
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg)) {
+    p <- sub("^--file=", "", file_arg[[1]])
+    if (file.exists(p) && identical(basename(p), .script_name))
+      return(normalizePath(p, winslash = "/", mustWork = TRUE))
+  }
+  for (cand in c("scripts/main_traj_facet.R",
+                 "clean/scripts/main_traj_facet.R")) {
+    if (file.exists(cand))
+      return(normalizePath(cand, winslash = "/", mustWork = TRUE))
+  }
+  stop("Cannot locate scripts/main_traj_facet.R. ",
+       "Rscript it from clean/, or sys.source() the full path.",
+       call. = FALSE)
+})
+script_dir <- dirname(.script_path)
 here_guess <- dirname(script_dir)
 source(file.path(here_guess, "R", "paths.R"))
 source(file.path(here_guess, "R", "constants.R"))
-here <- clean_root(start = c(getwd(), here_guess))
-root <- data_root(start = c(getwd(), here))
+here <- clean_root(start = c(here_guess, getwd()))
+root <- data_root(start = c(here, here_guess, getwd()))
 
 future_xmin <- 2000L
 arm_cols <- paper_cols[c("Historical", "Advice rule")]
@@ -80,15 +99,26 @@ need <- function(path, what) {
     stop("Missing ", what, ": ", path, call. = FALSE)
 }
 
+# BM_TRAJ_MP=pi (default; funder report) or sam (manuscript: Advice rule =
+# SAM MP from scripts/manuscript_sam.R). Output traj_facet.pdf / traj_facet_sam.pdf.
+traj_mp <- match.arg(Sys.getenv("BM_TRAJ_MP", unset = "pi"), c("pi", "sam"))
+
 message("Loading OM and results from ", root)
 need(file.path(root, "data/om/oms.RData"), "oms")
 need(file.path(root, "data/om/eqls.RData"), "eqls")
-need(file.path(root, "data/results/02.2_closedLoop.RData"), "closed loop")
-need(file.path(root, "data/results/02.5_rebuild.RData"), "rebuild")
 load(file.path(root, "data/om/oms.RData"))
 load(file.path(root, "data/om/eqls.RData"))
-load(file.path(root, "data/results/02.2_closedLoop.RData"))
-load(file.path(root, "data/results/02.5_rebuild.RData"))
+if (traj_mp == "pi") {
+  need(file.path(root, "data/results/02.2_closedLoop.RData"), "closed loop")
+  need(file.path(root, "data/results/02.5_rebuild.RData"), "rebuild")
+  load(file.path(root, "data/results/02.2_closedLoop.RData"))
+  load(file.path(root, "data/results/02.5_rebuild.RData"))
+} else {
+  need(file.path(root, "data/results/04.2_manuscript_sam.RData"),
+       "manuscript SAM results (scripts/manuscript_sam.R)")
+  load(file.path(root, "data/results/04.2_manuscript_sam.RData"))
+  closedLoop <- list(SRR = setNames(list(mp), srr_om))
+}
 
 if (!exists("future") || is.null(future[["Historical"]]) ||
     is.null(future[["Advice rule"]]))
@@ -96,8 +126,11 @@ if (!exists("future") || is.null(future[["Historical"]]) ||
        call. = FALSE)
 
 if (!exists("stocks") || is.null(stocks))
-  stocks <- read.csv(file.path(root, "data/reference/stocks.csv"),
-                     stringsAsFactors = FALSE)
+  stocks <- {
+    ensure_seed_inputs(root)
+    read.csv(file.path(root, "data/reference/stocks.csv"),
+             stringsAsFactors = FALSE)
+  }
 stocks <- stocks[match(case_sids, stocks$sid), , drop = FALSE]
 if (nrow(stocks) != 4L || anyNA(stocks$sid))
   stop("stocks.csv is missing one of case_sids: ",
@@ -228,8 +261,9 @@ p <- ggplot(ts, aes(year, data, colour = arm)) +
         panel.spacing.x = unit(0.45, "lines"),
         panel.spacing.y = unit(0.5, "lines"))
 
-pdf_path <- file.path(out_dir, "traj_facet.pdf")
-png_path <- file.path(out_dir, "traj_facet.png")
+stem <- if (traj_mp == "sam") "traj_facet_sam" else "traj_facet"
+pdf_path <- file.path(out_dir, paste0(stem, ".pdf"))
+png_path <- file.path(out_dir, paste0(stem, ".png"))
 ggsave(pdf_path, p, width = 15, height = 8.5)
 ggsave(png_path, p, width = 15, height = 8.5, dpi = 150)
 message("wrote ", pdf_path, "\n      ", png_path)
