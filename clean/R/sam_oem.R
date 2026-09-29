@@ -65,6 +65,17 @@ sam_catch_na <- function(stk, tol = sam_catch_tol, end = NULL) {
   stk
 }
 
+#' Survey timing passed to SAM (fraction of the year). The index is filled
+#' with start-of-year OM stock.n, so SAM must be told the survey is at 0;
+#' samIndex() sets 0.5, which makes SAM discount the index by half a year of
+#' Z and biases SSB when F changes.
+sam_survey_time <- 0
+
+sam_set_time <- function(idx, time = sam_survey_time) {
+  range(idx)[c("startf", "endf")] <- time
+  idx
+}
+
 #' Survey index: catchability 1 times lognormal noise, ages without
 #' recruitment and plus group.
 sam_oem <- function(stk, indexCv = 0.1, nits = 1L) {
@@ -85,7 +96,7 @@ sam_oem <- function(stk, indexCv = 0.1, nits = 1L) {
   index(idx) <- index(idx) %*%
     rlnorm(nits, index(idx) %=% 0, indexCv) %*%
     rlnorm(nits, index(idx)[1] %=% 0, indexCv)
-  idx
+  sam_set_time(idx)
 }
 
 #' Survey observations over the whole index: OM numbers times catchability.
@@ -102,6 +113,7 @@ sam_observe <- function(stk, idx) {
 # hcrICES multiplies the current year by Operating Model numbers, so those
 # years must still be the catchability multiplier, not numbers.
 sam_prime <- function(stk, idx, start, lag = 1L) {
+  idx <- sam_set_time(idx)
   yrs <- as.integer(dimnames(index(idx))$year)
   hist <- yrs < (as.integer(start) - as.integer(lag))
   if (!any(hist))

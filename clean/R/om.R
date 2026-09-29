@@ -22,3 +22,21 @@ require_om_gate <- function(root = data_root(), sids = NULL,
                             file = "data/results/01.1_lterm_eq.RData") {
   .load_flbacktest_fn("require_om_gate")(root = root, sids = sids, file = file)
 }
+
+#' Recruitment multipliers for a Future projection (project_hcr): 1 up to the
+#' terminal year of `stk`, then exp(mean log residual) of the most recent
+#' residual regime of `eql` (FLBacktest::recDevs regimes) for `nYears`.
+recent_regime_mult <- function(eql, id = "stock") {
+  rd <- recDevs(FLBRPs(setNames(list(eql), id)), nits = 1L)
+  rg <- unique(rd$rod[, c("regime", "minyear", "maxyear", "mn")])
+  rg <- rg[which.max(rg$maxyear), ]
+  c(mult = exp(rg$mn), minyear = rg$minyear, maxyear = rg$maxyear)
+}
+
+recent_regime_sr <- function(stk, eql, nYears, id = "stock") {
+  maxyr <- dims(stk)$maxyear
+  dev <- rec(FLCore::fwdWindow(stk, eql, end = maxyr + as.integer(nYears))) %=% 1
+  yrs <- ac(seq(maxyr + 1L, maxyr + as.integer(nYears)))
+  dev[, yrs] <- recent_regime_mult(eql, id)[["mult"]]
+  dev
+}
